@@ -132,24 +132,40 @@ patch 之后的最终值。
 
 产品的三层开放不是并列的，是渐进的。现状必须说清楚：
 
-> **开放度有上限，且现在只到 L2。** 六层定义、"一族而非任何游戏"的分界、
-> 以及 P1 之前必须补的三样东西（钩子表 / 系统容器 / mod API facade），见
+> **开放度有上限，且现在到 L3（能执行 mod 代码并介入事件）。** 六层定义、
+> "一族而非任何游戏"的分界、以及还缺的东西（系统容器 / mod facade 的完整面），见
 > [ADR 0005](decisions/0005-openness-boundary.md)。**不要对外宣称"能做任何游戏"。**
+> L3 的实现细节见 [ADR 0007](decisions/0007-hooks.md)。
 
 ### ① 内容开放 ✅
 
 写 TOML 就能加道具、敌人、房间。已完整可用，是整个仓库最扎实的部分。
 
-### ② 行为开放 🧪
+### ② 行为开放 ✅（脚本能力；组件/系统级仍不能扩展）
 
-**通道已实测可行，功能未实现。** 见 ADR 0003 的完整证据表。
+**钩子表 + 事件总线 + mod API 已实现并跑通**（ADR 0007）。一个 mod 是一份 `.gd`
+加一条 `kind="script"` 的内容，声明它挂哪些事件：
 
-```gdscript
-var gd := GDScript.new()
-gd.source_code = FileAccess.get_file_as_string(mod_dir + "/entry.gd")
-if gd.reload() != OK: return      # 语法错返回 Parse error，不崩进程
-gd.new().call("on_spawn", ctx)
+```toml
+kind = "script"
+source = "mods/scripts/physics_flourish.gd"
+events = ["grab.request", "grab.release", "impact", "tick"]
 ```
+
+引擎在运行时把源码编译、实例化、按 `events` 授权绑定。四层结构：
+
+```
+contract/registry.py  hook(...)      声明：参数 / 返回值 / 能否否决
+       ↓ 编译期导出
+pack.schema.hooks                    引擎据此校验"我发的都是契约里的"
+       ↓
+game/scripts/hooks/bus.gd            路由 + 预算 + 权限闸门
+game/scripts/hooks/api.gd            交给 mod 的唯一对象（只有动词，没有节点）
+       ↓
+mods/scripts/*.gd                    单个 handle(event, ctx, api) 入口
+```
+
+三条硬约束：**没声明的事件发不出去**、**没写进 events 的收不到**、**每帧事件数有上限**。
 
 不引入 Lua。GDScript 在训练数据里，Lua 绑定不在——这对"agent 长期维护"是决定性的。
 
@@ -159,6 +175,8 @@ gd.new().call("on_spawn", ctx)
 |---|---|---|
 | `data-only` | TOML + 资源 | 默认，无需授权 |
 | `scripted` | 额外带 `.gd`，**完全权限** | 需玩家显式授权，UI 必须标出来 |
+
+当前仓库里的 `mods/physics_flourish.toml` 就是 `scripted` 级的示例（自带脚本）。
 
 ### ③ 外观开放 🧪
 

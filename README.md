@@ -12,8 +12,8 @@
 
 题材故意不定。框架先成立，内容后边长。
 
-> 状态：P1（手感）进行中。有可操控角色、重力、碰撞、能推箱子，卡通渲染已接上。
-> 还差抓取与投掷。详细进度见 [`docs/status.md`](docs/status.md)。
+> 状态：P1（手感）基本完成。有可操控角色、重力、碰撞、抓取与投掷，卡通渲染已接上，
+> 行为 mod（事件钩子）已跑通。详细进度见 [`docs/status.md`](docs/status.md)。
 
 **这个仓库的纪律是可执行的**：`./check.sh` 会检查目录命名、文件长度、域大小，
 以及最重要的一条——引擎层有没有硬编码具体内容的 id。写在文档里的架构，agent 会忘；
@@ -36,10 +36,10 @@
 
 | 目录 | 内容 | 状态 |
 |---|---|---|
-| `content/` `mods/` | TOML 内容：原型、道具、房间、覆写层 | 可用 |
-| `contract/` | 扩展点契约：合法的组件、字段、枚举 | 可用 |
+| `content/` `mods/` | TOML 内容：原型、道具、房间、覆写层、行为 mod | 可用 |
+| `contract/` | 扩展点契约：组件、字段、枚举、事件钩子 | 可用 |
 | `tools/` | 内容编译器、热重载、架构纪律检查 | 可用 |
-| `game/` | Godot 4.6 工程 | 能玩：角色 + 物理 + 卡通渲染 |
+| `game/` | Godot 4.6 工程 | 能玩：角色 + 物理 + 抓取 + 卡通渲染 |
 | `legacy/` | 早期的自研 C++ 渲染器与 Python 参考实现 | 归档，不参与构建 |
 
 `legacy/cpp-renderer` 是一个真实跑通过的 OpenGL 渲染器（3 万条内容 / 3 次 draw call /
@@ -71,12 +71,15 @@ cd ..
 | 走 | `WASD` |
 | 跳 | `空格` |
 | 冲刺 | `Shift` |
+| **抓起 / 扔出** | **左键按住 / 松开** |
+| **轻轻放下** | **`R`** |
 | 释放鼠标 | `Esc` |
 
-你会站在一个堆着木箱的院子里：14 个箱子是**真的刚体**，会掉、会滚、能被推。
-走过去撞它们就能推开。旁边还有两个房间——墓厅里有 6 个骨行者，葬园里有 3 个墓影。
+你会站在一个堆着木箱的院子里：14 个箱子是**真的刚体**，会掉、会滚、能被推、能被抓起来扔。
+旁边还有两个房间——墓厅里有 6 个骨行者，葬园里有 3 个墓影。
 
-**还差抓取与投掷**，那是下一步。现在能推，不能拿。
+抓取用的是力，不是把物体挂到手上：手上的东西仍然参与碰撞、仍然会撞翻别的东西。
+重的东西提起来更慢、扔出去更近——这个差别不是脚本写的，是质量与加速度上限算出来的。
 
 画面是卡通渲染：两级色阶 + 边缘光 + 反向外扩描边。原神那种脸做不到——
 那需要贴图与 blend shape，属于资产管线。现在能做到的是"色块卡通风"。
@@ -108,6 +111,43 @@ brain = "ambusher"
 ```
 
 然后 `./check.sh`。**不用改任何代码，不用重新编译引擎。**
+
+## 写一个行为 mod
+
+两步。先声明它要挂哪些事件（这一步同时是**权限清单**）：
+
+```toml
+# mods/my_glove.toml
+api_version = 1
+kind = "script"
+name = "磁力手套"
+source = "mods/scripts/my_glove.gd"
+events = ["grab.request", "grab.release"]
+```
+
+再写脚本，只有一个入口：
+
+```gdscript
+extends RefCounted
+
+func handle(event: String, ctx: Dictionary, api) -> Dictionary:
+	if event == "grab.request":
+		return {"hold": 1.2}                      # 抓得更近
+	if event == "grab.release":
+		api.impulse(int(ctx["handle"]), Vector3.UP * 40.0)
+	return {}
+```
+
+`./check.sh` 会编译它、校验 `events` 里的钩子都在契约里注册过，
+并在无头自检里真的加载一次。**写错了不会等到玩游戏才发现。**
+
+`api` 只提供动词：`spawn` / `impulse` / `tint` / `reset_tint` / `pos` / `speed` / `nearest`。
+拿不到节点、拿不到 `Transform3D`——这是故意的，理由见
+[ADR 0007](docs/decisions/0007-hooks.md)：暴露意图，不暴露结构。
+
+钩子清单在 `contract/registry.py`，当前 6 个：`world.ready`、`entity.spawn`、
+`grab.request`（可否决）、`grab.release`、`impact`、`tick`。
+契约声明与引擎实际发出的事件必须完全相等，不符合 `check.sh` 就红。
 
 ## 给 agent 的话
 
