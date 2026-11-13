@@ -225,3 +225,25 @@ func camera() -> Camera3D:
 ## 抓取器。给探针和调试用 —— 玩法本身不通过这个访问，输入直接喂给它。
 func grabber():
 	return _grabber
+
+
+## 存档用：玩家在世界里的"姿势"。
+##
+## 只存位置和两个角度，不存速度 —— 读档时正在飞的玩家应该落地，
+## 而不是保留着上次退出那一刻的动量继续飞。那种"还原得太真"反而更怪。
+func pose() -> Dictionary:
+	return {"pos": global_position, "yaw": _yaw, "pitch": _pitch}
+
+
+func set_pose(p: Dictionary) -> void:
+	var pos = p.get("pos", null)
+	if pos is Vector3:
+		global_position = pos
+		# 速度必须清掉：否则读档瞬间角色会带着上一局的速度冲出去，
+		# 而这个"上一局"其实是上一次启动时的事。
+		velocity = Vector3.ZERO
+	_yaw = float(p.get("yaw", 0.0))
+	_pitch = clamp(float(p.get("pitch", -0.16)), PITCH_MIN, PITCH_MAX)
+	rotation.y = _yaw
+	if _arm != null:
+		_arm.rotation.x = _pitch

@@ -18,6 +18,7 @@ const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
 const API_SCRIPT = preload("res://scripts/hooks/api.gd")
 const LOADER = preload("res://scripts/mods/loader.gd")
 const REGISTRY = preload("res://scripts/mods/registry.gd")
+const SAVE = preload("res://scripts/save/store.gd")
 
 const PACK_PATH := "res://content.pack.json"
 
@@ -41,6 +42,8 @@ var mod_blocked := 0
 
 var _tick_acc := 0.0
 var _frames := 0
+var _world = null
+var _player = null
 
 
 func _ready() -> void:
@@ -249,34 +252,95 @@ func _selftest() -> bool:
 
 ## 场景组装：环境 + 主光 + 世界 + 玩家。全部是引擎的"怎么跑"。
 func _setup_scene() -> void:
+	get_tree().auto_accept_quit = false
 	add_child(_make_environment())
 	add_child(_make_sun())
 
-	var world = WORLD_SCRIPT.new()
-	world.name = "world"
-	world.bus = bus
-	world.api = api
+	_world = WORLD_SCRIPT.new()
+	_world.name = "world"
+	_world.bus = bus
+	_world.api = api
 	# mod 造出来的东西挂在世界下，跟着世界一起释放。
-	api.attach_world(world)
-	add_child(world)
-	world.realize(plan)
+	api.attach_world(_world)
+	add_child(_world)
+	_world.realize(plan)
 
-	var player = PLAYER_SCRIPT.new()
-	player.name = "player"
+	_player = PLAYER_SCRIPT.new()
+	_player.name = "player"
 	# 注入必须在入树之前：_ready 里要拿它们初始化抓取器。
-	# 组件之间不互相伸手，依赖由装配层给。
-	player.hooks = bus
-	player.api = api
-	add_child(player)
-	player.position = _start_position(world)
-	world.attach_camera(player.camera())
+	# 组件之间互相不伸手，依赖由装配层给。
+	_player.hooks = bus
+	_player.api = api
+	add_child(_player)
+	_player.position = _start_position(_world)
+	_world.attach_camera(_player.camera())
+
+	# 读档必须在世界和玩家都已就位之后：它要替换整个世界里的刚体，
+	# 并把玩家挪回上次站的地方。
+	if "--fresh" in OS.get_cmdline_user_args():
+		print("跳过读档（--fresh）")
+	else:
+		_resume()
 
 	# 世界就绪：刚体已全部生成，玩家已就位。mod 在这里做一次性初始化。
 	bus.emit("world.ready", {
 		"rooms": plan.rooms.size(),
 		"entities": plan.instance_count(),
-		"player_pos": player.global_position,
+		"player_pos": _player.global_position,
 	})
+
+
+## 读档。读不出来时**不能**当成"没有存档"——那会让玩家以为世界丢了，
+## 而实际上只是这一次读不进来。两者对玩家是完全不同的两件事。
+func _resume() -> void:
+	if not SAVE.exists():
+		return
+	var save := SAVE.read()
+	if save.is_empty():
+		printerr("存档读不出来：%s —— 这次从头开始（原文件没动）" % SAVE.path())
+		return
+	var r: Dictionary = SAVE.apply(save, _world, _player, pack)
+	var err := String(r.get("error", ""))
+	if not err.is_empty():
+		printerr("读档失败：%s" % err)
+		return
+	var missing: Array = r["missing"]
+	var line := "读档：恢复 %d 个物体（清掉 %d 个）" % [r["spawned"], r["cleared"]]
+	if not missing.is_empty():
+		# 内容不在了（mod 被卸载、原型改名）。玩家有权知道自己的东西为什么少了。
+		line += "  —— %d 种内容找不到，已跳过：%s" % [missing.size(), ", ".join(missing)]
+	print(line)
+
+
+func _save_now(quiet: bool) -> void:
+	if _world == null or _player == null:
+		return
+	var save := SAVE.collect(_world, _player)
+	if not SAVE.write(save):
+		return
+	if not quiet:
+		print("已保存：%d 个物体 -> %s" % [(save["bodies"] as Array).size(), SAVE.path()])
+
+
+## F5 存、F9 读。手动存档先于自动存档存在，理由很实在：
+## 调试时要能"回到刚才那一刻"，自动存档给不了这个。
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	match (event as InputEventKey).physical_keycode:
+		KEY_F5:
+			_save_now(false)
+		KEY_F9:
+			_resume()
+
+
+## 关窗口时保存。这是玩家唯一一定会做的"结束动作"——
+## 没有它，"关了再开东西就没了"会让整个沙盒看起来是个玩具。
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_save_now(true)
+		get_tree().quit()
+
 
 
 ## 固定节拍的 tick。用累加器而不是"每 N 帧"，因为帧率会变，节拍不该跟着变。

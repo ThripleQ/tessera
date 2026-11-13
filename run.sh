@@ -38,7 +38,7 @@ game_args=""
 godot_args=""
 for a in "$@"; do
     case "$a" in
-        --trust=*|--selftest) game_args="$game_args $a" ;;
+        --trust=*|--selftest|--fresh) game_args="$game_args $a" ;;
         *) godot_args="$godot_args $a" ;;
     esac
 done

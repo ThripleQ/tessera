@@ -101,6 +101,34 @@ func _on_body_entered(other: Node, rb: RigidBody3D) -> void:
 	})
 
 
+## 在世界里造一个刚体。mod 的 spawn 和存档还原都走这一处 ——
+## "造一个物体会发生什么"（登记 handle、监视碰撞、发 entity.spawn）
+## 只能有一份实现，否则存档还原出来的东西会悄悄少掉某些登记，
+## 表现成"读档之后有些箱子不响应抓取"这种极难查的差异。
+##
+## 要求 world 已入树：登记时会发 entity.spawn，mod 拿到的位置必须是世界坐标。
+func add_dynamic(item: Dictionary) -> RigidBody3D:
+	var rb: RigidBody3D = SOLIDS.make_dynamic(item)
+	if rb == null:
+		return null
+	add_child(rb)
+	_register_body(rb, item)
+	return rb
+
+
+## 清空所有动态物体。载入存档时必须先清再建 ——
+## 否则旧的那些会和新的一起留在世界里，而且每读一次档数量就涨一轮。
+func clear_dynamic() -> int:
+	var n := 0
+	for rb in bodies:
+		if is_instance_valid(rb):
+			rb.queue_free()
+			n += 1
+	bodies.clear()
+	_speeds.clear()
+	return n
+
+
 ## 开场该站在哪。优先选有刚体的房间 —— 玩家第一眼就该看到"东西会动"，
 ## 否则他会以为这还是一片静态布景。
 func start_bounds() -> AABB:
