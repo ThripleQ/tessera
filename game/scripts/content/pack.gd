@@ -54,8 +54,8 @@ func spawnables() -> Array[String]:
 	return out
 
 
-## 世界里实际会用到的网格种类。合批是按 (网格, 配色) 分组的，
-## 所以这两个集合的大小直接决定 draw call 的量级。
+## 世界里实际会用到的网格种类。合批是按网格分组的，
+## 所以这个集合的大小直接决定提交次数的量级。
 func mesh_ids() -> PackedStringArray:
 	var seen := {}
 	for id in entities:
@@ -63,6 +63,27 @@ func mesh_ids() -> PackedStringArray:
 		if model.has("mesh"):
 			seen[String(model["mesh"])] = true
 	return PackedStringArray(seen.keys())
+
+
+## 某个 kind 的全部实体 id，按 id 排序保证顺序确定（不依赖字典遍历顺序）。
+func ids_of_kind(kind: String) -> PackedStringArray:
+	var out: Array[String] = []
+	for id in entities:
+		if String(entities[id].get("kind", "")) == kind:
+			out.append(id)
+	out.sort()
+	return PackedStringArray(out)
+
+
+## 配色由契约提供，引擎不认识任何配色名。
+## 未知配色返回刺眼的品红 —— 出问题时要看得见，不要悄悄变成灰色。
+func palette_color(name: String) -> Color:
+	var table: Dictionary = schema.get("palettes", {})
+	var rgb = table.get(name, null)
+	if rgb == null:
+		push_warning("未知配色 `%s`（契约里没有），用品红代替" % name)
+		return Color(1.0, 0.0, 1.0)
+	return Color(float(rgb[0]), float(rgb[1]), float(rgb[2]))
 
 
 func palette_ids() -> PackedStringArray:

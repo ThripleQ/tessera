@@ -38,6 +38,7 @@ from contract.registry import (  # noqa: E402
     KINDS,
     LOOT_TABLES,
     MESHES,
+    PALETTES,
     SUPPORTED_API,
     check_value,
 )
@@ -351,6 +352,7 @@ def build_schema() -> dict:
         "brains": list(BRAINS),
         "loot_tables": list(LOOT_TABLES),
         "meshes": dict(MESHES),
+        "palettes": {n: list(c) for n, c in sorted(PALETTES.items())},
     }
 
 

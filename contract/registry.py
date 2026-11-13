@@ -75,6 +75,16 @@ MESHES: dict[str, int] = {
     "prop_pillar": 24,
 }
 
+# 配色注册表：(r, g, b)，0..1 的 sRGB。
+# 颜色放在契约里而不是引擎里，是为了让引擎**不认识任何配色名**——
+# 加一个新配色只改这一处，引擎从内容包读到的就是新颜色。
+PALETTES: dict[str, tuple[float, float, float]] = {
+    "default": (0.72, 0.72, 0.70),
+    "bone": (0.86, 0.84, 0.76),
+    "violet": (0.45, 0.36, 0.62),
+    "wood": (0.48, 0.34, 0.22),
+}
+
 
 def component(name: str, doc: str = "", **fields: Field) -> None:
     if name in COMPONENTS:
@@ -174,7 +184,7 @@ component(
     "model",
     "外观。mesh 决定三角形数，palette 决定配色（同一 mesh 换色不增加 draw call）。",
     mesh=Field("str", "prop_crate", enum=tuple(MESHES), doc="网格 id"),
-    palette=Field("str", "default", doc="配色方案 id"),
+    palette=Field("str", "default", enum=tuple(PALETTES), doc="配色方案 id"),
     cast_shadow=Field("bool", False, doc="是否投射实时阴影（很贵，默认关）"),
 )
 
