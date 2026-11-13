@@ -380,6 +380,13 @@ hook(
 )
 
 hook(
+    "entity.remove",
+    "一个刚体离开世界。与 entity.spawn 严格对称：有 handle 的才会发，"
+    "所以 mod 拿到的 handle 迟早会在这里被收回。",
+    params=("id", "handle", "pos"),
+)
+
+hook(
     "grab.request",
     "玩家试图抓起某个物体。可以否决，也可以改变持握距离。",
     params=("id", "handle", "mass", "pos"),

@@ -11,7 +11,7 @@ extends CharacterBody3D
 ## 这三个是"看起来粗糙但手感好"的典型例子：它们不增加任何视觉效果。
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
-const GRAB = preload("res://scripts/player/grab.gd")
+const HANDS = preload("res://scripts/player/hands.gd")
 
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 8.2
@@ -48,12 +48,15 @@ var _captured := false
 var _arm: SpringArm3D
 var _camera: Camera3D
 var _visual: Node3D
-var _grabber
+var _hands
 
 ## 由 main 在 add_child 之前注入。玩家不自己去找总线 ——
 ## 依赖由装配层给，组件之间不互相伸手（structure.md 四）。
 var hooks = null
 var api = null
+## 世界。玩家要它只做一件事：拆掉对着的东西。
+## 不通过 api 转一道手是因为 api 是给 mod 的接口，而这里的动作从玩家发起。
+var world = null
 
 ## 菜单类 UI 打开时置真。玩家的输入必须能被整体接管 ——
 ## 否则鼠标在选菜单，视角在后面跟着转，选完发现自己转了半圈。
@@ -125,8 +128,8 @@ func _ready() -> void:
 	_camera.current = true
 	_arm.add_child(_camera)
 
-	_grabber = GRAB.new()
-	_grabber.setup(self, _camera, hooks, api)
+	_hands = HANDS.new()
+	_hands.setup(self, _camera, hooks, api, world)
 
 	rotation.y = _yaw
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -140,13 +143,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.pressed:
 			if _captured:
 				# 按住左键抓住，松手扔出去。这是沙盒里最自然的一对动作。
-				_grabber.press()
+				_hands.press()
 			else:
 				# 没捕获鼠标时，左键的职责是先把鼠标要回来。
 				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 				_captured = true
 		elif _captured:
-			_grabber.release(true)
+			_hands.release(true)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		# 右键拆掉对着的东西。
+		#
+		# 有了这个动作，"生成预算"才是可以还回去的：在此之前玩家放满 96 件
+		# 之后沙盒就死了，只能重启。能放不能收，不叫沙盒。
+		if event.pressed and _captured:
+			_hands.scrape()
 	elif event is InputEventKey and event.physical_keycode == KEY_ESCAPE and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_captured = false
@@ -158,7 +168,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_buffer = JUMP_BUFFER
 	elif event is InputEventKey and event.physical_keycode == KEY_R and event.pressed:
 		# 轻轻放下，不给冲量。想摆东西时必须有这个 —— 否则每次都是扔。
-		_grabber.release(false)
+		_hands.release(false)
 
 
 func _physics_process(delta: float) -> void:
@@ -197,7 +207,7 @@ func _physics_process(delta: float) -> void:
 	_push_bodies(delta)
 	# 抓取在 move_and_slide 之后跑：手上的东西永远以"玩家已经落到哪儿"为准，
 	# 而不是以玩家上一帧的位置为准。
-	_grabber.update(delta)
+	_hands.update(delta)
 
 
 ## 推开挡路的刚体。
@@ -242,8 +252,8 @@ func camera() -> Camera3D:
 
 
 ## 抓取器。给探针和调试用 —— 玩法本身不通过这个访问，输入直接喂给它。
-func grabber():
-	return _grabber
+func hands():
+	return _hands
 
 
 ## 存档用：玩家在世界里的"姿势"。

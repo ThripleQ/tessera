@@ -1,6 +1,10 @@
 extends RefCounted
 
-## 抓取与扔出。
+## 手能做的三件事：**抓、扔、拆**。
+##
+## 为什么这三件事在一个文件里：它们共用同一个"你正对着什么"的判断。
+## 拆开成两个文件就要把射线打两遍，而两份射线迟早会在起点、距离、屏蔽列表上分叉 ——
+## 表现成"有个位置明明能抓却拆不掉"，是最难查的一类不一致。
 ##
 ## 这个系统是沙盒乐趣的全部来源，所以它有三个不显眼但决定手感的选择：
 ##
@@ -63,6 +67,7 @@ var _player = null
 var _camera: Camera3D = null
 var _bus = null
 var _api = null
+var _world = null
 var _held_time := 0.0
 
 
@@ -90,11 +95,12 @@ func _center(b: RigidBody3D) -> Vector3:
 	return b.to_global(b.center_of_mass)
 
 
-func setup(player, camera: Camera3D, bus, api) -> void:
+func setup(player, camera: Camera3D, bus, api, world) -> void:
 	_player = player
 	_camera = camera
 	_bus = bus
 	_api = api
+	_world = world
 
 
 func is_holding() -> bool:
@@ -108,8 +114,8 @@ func held_id() -> String:
 	return _api.content_id(handle)
 
 
-## 视线正中能抓到什么。返回 RigidBody3D 或 null。
-func aim() -> RigidBody3D:
+## 视线正中能碰到什么。返回任何物理体：刚体、钉住的静态物、房间墙上的碰撞壳。
+func aim_node() -> Node:
 	if _camera == null:
 		return null
 	var from := _origin()
@@ -120,10 +126,37 @@ func aim() -> RigidBody3D:
 	var hit: Dictionary = _camera.get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		return null
-	var c = hit.get("collider")
-	if c is RigidBody3D:
-		return c
+	return hit.get("collider")
+
+
+## 视线正中能抓到什么。只有刚体能被抓 —— 钉住的东西没有物理身份，
+## 拉它等于推一面墙。
+func aim() -> RigidBody3D:
+	var n := aim_node()
+	if n is RigidBody3D:
+		return n
 	return null
+
+
+## 拆掉视线里的东西。返回 true = 真的拆掉了。
+##
+## **只拆玩家和 mod 造出来的**：房间自带的障碍不在 `world.props` 里，
+## `world.remove_thing` 会拒绝。房间是内容的形状，不该被一块一块拆掉 ——
+## 那会在世界里留下一个既不属于内容、也不属于存档的洞。
+##
+## 为什么需要有这个动作：生成预算是 96 件，而在此之前**没有任何办法把它还回去**。
+## 玩家放满 96 件之后沙盒就死了，只能重启。能放不能收，不叫沙盒。
+func scrape() -> bool:
+	if _world == null or _player == null:
+		return false
+	var node := aim_node()
+	if node == null:
+		return false
+	# 手上正拿着的东西不拆：那个是"要用的"，不是"要扔的"。
+	# 而且射线很容易先打到手里的箱子 —— 误触一次就把刚拿起来的东西弄没了。
+	if is_holding() and node == body:
+		return false
+	return _world.remove_thing(node)
 
 
 func press() -> bool:

@@ -186,10 +186,11 @@ func _setup_scene() -> void:
 
 	_player = PLAYER_SCRIPT.new()
 	_player.name = "player"
-	# 注入必须在入树之前：_ready 里要拿它们初始化抓取器。
+	# 注入必须在入树之前：_ready 里要拿它们初始化手。
 	# 组件之间互相不伸手，依赖由装配层给。
 	_player.hooks = bus
 	_player.api = api
+	_player.world = _world
 	add_child(_player)
 	_player.position = _start_position(_world)
 	_world.attach_camera(_player.camera())

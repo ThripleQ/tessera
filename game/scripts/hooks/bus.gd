@@ -22,6 +22,7 @@ const MAX_EVENTS_PER_FRAME := 256
 const EMITTED: Array[String] = [
 	"world.ready",
 	"entity.spawn",
+	"entity.remove",
 	"grab.request",
 	"grab.release",
 	"impact",

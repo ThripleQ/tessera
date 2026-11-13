@@ -155,6 +155,10 @@ static func apply(save: Dictionary, world, player, pack) -> Dictionary:
 			continue
 		rb.linear_velocity = _to_vec(rec.get("v", []))
 		rb.angular_velocity = _to_vec(rec.get("w", []))
+		# 认领进预算。不认领的话读一次档额度就清零，玩家能把上次删掉的东西
+		# 再造一遍 —— 那不是预算，那是个计数器。
+		if world.api != null:
+			world.api.adopt(rb)
 		spawned += 1
 
 	# 静态物。它当初被存下的那一刻是静态的，但现在还静不静**由内容说了算** ——
@@ -168,10 +172,17 @@ static func apply(save: Dictionary, world, player, pack) -> Dictionary:
 				missing.append(pid)
 			continue
 		if bool(pitem["dynamic"]):
-			world.add_dynamic(pitem)
-			spawned += 1
-		elif world.add_static(pitem) != null:
-			placed += 1
+			var rb2 = world.add_dynamic(pitem)
+			if rb2 != null:
+				if world.api != null:
+					world.api.adopt(rb2)
+				spawned += 1
+		else:
+			var node = world.add_static(pitem)
+			if node != null:
+				if world.api != null:
+					world.api.adopt(node)
+				placed += 1
 
 	var p: Dictionary = save.get("player", {})
 	player.set_pose({

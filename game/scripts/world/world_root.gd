@@ -151,16 +151,57 @@ func clear_spawned() -> int:
 	var n := 0
 	for rb in bodies:
 		if is_instance_valid(rb):
+			if api != null:
+				api.release(rb)
 			rb.queue_free()
 			n += 1
 	bodies.clear()
 	for p in props:
 		if is_instance_valid(p):
+			if api != null:
+				api.release(p)
 			p.queue_free()
 			n += 1
 	props.clear()
 	_speeds.clear()
 	return n
+
+
+## 拿掉**一件**被造出来的东西。动态的归还 handle 和预算，静态的直接释放。
+## 返回 true = 它确实是我的东西（在 bodies 或 props 里）。
+##
+## 这个判断很重要：射线打到房间墙上的碰撞壳时，`remove_thing` 必须返回 false。
+## 房间的障碍不在 `props` 里，正是因为那条分界 —— 它们是内容的形状，
+## 玩家不该能一块一块拆掉房间。
+func remove_thing(node: Node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+
+	var i := bodies.find(node)
+	if i >= 0:
+		var id := String(node.get_meta("content_id", ""))
+		var h := int(node.get_meta("handle", 0))
+		var pos: Vector3 = node.global_position
+		bodies.remove_at(i)
+		_speeds.erase(node)
+		if api != null:
+			api.release(node)
+		# 与 entity.spawn 对称：只有拿过 handle 的东西才有"离开"这件事要通知。
+		# 位置在 queue_free 之前取，之后它就不再是世界坐标了。
+		if bus != null and h > 0:
+			bus.emit("entity.remove", {"id": id, "handle": h, "pos": pos})
+		node.queue_free()
+		return true
+
+	var j := props.find(node)
+	if j >= 0:
+		props.remove_at(j)
+		if api != null:
+			api.release(node)
+		node.queue_free()
+		return true
+
+	return false
 
 
 ## 开场该站在哪。优先选有刚体的房间 —— 玩家第一眼就该看到"东西会动"，

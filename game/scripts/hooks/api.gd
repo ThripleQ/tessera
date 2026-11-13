@@ -26,8 +26,14 @@ var _world: Node3D = null
 var _bodies: Dictionary = {}     # handle -> RigidBody3D
 var _ids: Dictionary = {}        # handle -> 内容 id（引擎只转手，不解读）
 var _base_color: Dictionary = {} # handle -> 原始颜色，给 reset_tint 用
+## 现在世界上有几件"我造出来的"东西 —— 预算按这张表算。
+##
+## 为什么不是单纯的计数器：拆除必须能**归还**预算，读档必须能**重新认领**
+## 上次造的东西。两件事都要求"哪几件是我造的"这个信息本身存在，
+## 而计数器不记得任何人的名字，于是删掉的东西照样占着额度，
+## 读一次档额度还会清零（可以无限刷）。
+var _made: Dictionary = {}       # instance_id -> handle（静态物没有 handle，记 0）
 var _next := 1
-var spawned := 0
 var refused := 0
 
 
@@ -62,13 +68,73 @@ func count() -> int:
 	return _bodies.size()
 
 
+## 预算已用多少。动态和静态一起算 —— 静态物不参与模拟，但它的碰撞体
+## 永久占用物理查询，"不动的物体不要钱"是错觉，只是便宜。
+func budget_used() -> int:
+	return _made.size()
+
+
+func budget_left() -> int:
+	return max(0, MAX_SPAWNED - _made.size())
+
+
+func _remember(node: Node, handle: int) -> void:
+	if node == null:
+		return
+	_made[node.get_instance_id()] = handle
+
+
+## 一件东西被拿掉了：归还预算，作废它的 handle。
+##
+## 由 world 在移除时调用 —— 世界知道"谁走了"，api 只知道"我记过谁"。
+## 两边的信息合起来才是事实：只是从世界里删掉节点，handle 会留在这里
+## 继续指向一个被释放的对象；只从这张表里删掉，预算会永久漏掉一格。
+func release(node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var iid: int = node.get_instance_id()
+	if not _made.has(iid):
+		return
+	var h := int(_made[iid])
+	_made.erase(iid)
+	if h > 0:
+		_bodies.erase(h)
+		_ids.erase(h)
+		_base_color.erase(h)
+
+
+## 把一件**已经造好的**东西认领进预算。读档还原走这里。
+## 不认领的话读一次档预算就清零，玩家能把上次删掉的东西再造一遍 ——
+## 那不是预算，那是个计数器。
+func adopt(node: Node) -> void:
+	if node == null:
+		return
+	_remember(node, int(node.get_meta("handle", 0)))
+
+
+## mod 删掉一件东西。返回 false = 这个 handle 不存在，或者那东西不归玩家删
+## （比如房间墙上的碰撞壳 —— 它不在 world.props 里，是内容的形状）。
+func remove(handle: int) -> bool:
+	var b = _bodies.get(handle, null)
+	if b == null or not is_instance_valid(b):
+		return false
+	if _world == null:
+		return false
+	return _world.remove_thing(b)
+
+
 ## 世界里的刚体被整体换掉之后调用（读档）。旧 handle 必须全部作废 ——
 ## 留着它们意味着 mod 调 api.pos(h) 会去读一个已经释放的对象。
 ## _next 不回退：handle 单调递增，mod 不可能拿旧 handle 撞上新物体。
+##
+## 预算表一起清空：这张表按节点身份记账，而节点已经全没了。
+## **现存的东西要占额度，得由调用方重新认领**（`adopt`）——读档正是这么做的。
+## 不这么分，"读一次档额度清零"就成了无限刷东西的后门。
 func forget_all() -> void:
 	_bodies.clear()
 	_ids.clear()
 	_base_color.clear()
+	_made.clear()
 
 
 func exists(handle: int) -> bool:
@@ -175,9 +241,9 @@ func spawn(content_id: String, at: Vector3, yaw: float = 0.0) -> Dictionary:
 	# 预算由系统强制（ADR 0005）。开放不等于无限：没人拦的 spawn 循环
 	# 能把帧率瞬间打到零，而"玩家的东西能无限放、mod 的不能"更糟 ——
 	# 那预算就成了只约束好人的规矩。
-	if spawned >= MAX_SPAWNED:
+	if _made.size() >= MAX_SPAWNED:
 		refused += 1
-		return _refuse("预算用尽（上限 %d），先拿掉一些" % MAX_SPAWNED)
+		return _refuse("预算用尽（上限 %d），先拆掉一些" % MAX_SPAWNED)
 	if not _pack.entities.has(content_id):
 		return _refuse("没有这条内容：%s" % content_id)
 	# 抽象基类不能单独存在。它的数据往往是不完整的，摆出来是个半成品，
@@ -192,19 +258,20 @@ func spawn(content_id: String, at: Vector3, yaw: float = 0.0) -> Dictionary:
 	# 静态物：有碰撞、挡路、推不动，不进 bodies、没有 handle。
 	# 它照样是"玩家的动作"，会被单独记住（world.props / 存档）。
 	if not bool(item["dynamic"]):
-		if _world.add_static(item) == null:
+		var prop = _world.add_static(item)
+		if prop == null:
 			return _refuse("网格 `%s` 引擎没实现几何" % String(item["mesh"]))
-		spawned += 1
+		_remember(prop, 0)
 		return {"ok": true, "handle": 0, "dynamic": false, "reason": ""}
 
 	var body = _world.add_dynamic(item)
 	if body == null:
 		return _refuse("刚体造不出来：`%s`" % content_id)
-	spawned += 1
 	# handle 由 world 在登记时算好挂在刚体上。这里不自己发号 ——
 	# 一个物体两个号，mod 手里的 handle 就有一半是假的。
-	return {"ok": true, "handle": int(body.get_meta("handle", 0)),
-		"dynamic": true, "reason": ""}
+	var handle := int(body.get_meta("handle", 0))
+	_remember(body, handle)
+	return {"ok": true, "handle": handle, "dynamic": true, "reason": ""}
 
 
 func _refuse(reason: String) -> Dictionary:

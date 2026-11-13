@@ -101,7 +101,7 @@ func _build() -> void:
 	# 而"能放东西"是这个产品目前唯一还没兑现的承诺。
 	_hint = Label.new()
 	_hint.name = "hint"
-	_hint.text = "Tab  生成菜单　　F5 存档　　F9 读档"
+	_hint.text = "Tab  生成菜单　　右键 拆除瞄着的东西　　F5 存档　　F9 读档"
 	_hint.add_theme_font_size_override("font_size", 15)
 	_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	_hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))
@@ -139,7 +139,7 @@ func refresh() -> void:
 		# id 给人查，名字给人看。tooltip 里放 id，因为菜单里只有名字。
 		_list.set_item_metadata(idx, id)
 		_list.set_item_tooltip(idx, id)
-	_status.text = "共 %d 项 · 双击或回车生成 · Tab 关闭" % _ids.size()
+	_status.text = "共 %d 项 · 双击或回车生成 · Tab 关闭 · 右键拆掉瞄着的东西" % _ids.size()
 
 
 func set_open(v: bool) -> void:
@@ -211,5 +211,5 @@ func spawn_selected() -> bool:
 		_status.text = "没放下：%s" % String(r.get("reason", "未知原因"))
 		return false
 	var what := "刚体" if bool(r["dynamic"]) else "固定物"
-	_status.text = "已放下 %s（%s）· 剩余预算 %d" % [pack.label_of(id), what, api.MAX_SPAWNED - api.spawned]
+	_status.text = "已放下 %s（%s）· 剩余预算 %d" % [pack.label_of(id), what, api.budget_left()]
 	return true
