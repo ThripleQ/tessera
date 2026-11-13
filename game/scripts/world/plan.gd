@@ -100,6 +100,7 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		var pos := center + Vector3(cos(ang) * dist, drop, sin(ang) * dist)
 		var basis := Basis(Vector3.UP, rng.randf() * TAU)
 		room["items"].append({
+			"id": arch_id,
 			"mesh": mesh_id,
 			"xform": Transform3D(basis, pos),
 			"color": color,

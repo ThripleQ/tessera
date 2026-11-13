@@ -76,6 +76,9 @@ static func make_dynamic(item: Dictionary) -> RigidBody3D:
 	body.name = "rigid"
 	body.transform = item["xform"]
 	body.mass = float(collider.get("mass", 5.0))
+	# 内容 id 只作为元数据挂在身上。引擎从不读它做判断，
+	# 但 mod 需要知道"我抓到的是什么"—— 这是内容侧的知识，不是引擎的。
+	body.set_meta("content_id", String(item.get("id", "")))
 	# 原点在底面，质心在几何中心。不显式指定的话，Godot 会围着底面转，
 	# 扔出去的时候物体会像陀螺一样甩，而不是像箱子一样翻。
 	body.center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM

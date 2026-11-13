@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 from contract.registry import (  # noqa: E402
     BRAINS,
     COMPONENTS,
+    HOOKS,
     KINDS,
     LOOT_TABLES,
     MESHES,
@@ -43,7 +44,10 @@ from contract.registry import (  # noqa: E402
     check_value,
 )
 
-ALLOWED_TOP = {"api_version", "id", "kind", "extends", "name", "doc", "tags", "components", "target"}
+ALLOWED_TOP = {
+    "api_version", "id", "kind", "extends", "name", "doc", "tags",
+    "components", "target", "source", "events",
+}
 OPS = ("set", "mul", "add")
 
 
@@ -315,6 +319,59 @@ def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list
             pass
 
 
+def check_scripts(resolved: dict[str, dict], errors: list[str], warnings: list[str]) -> None:
+    """行为 mod 的静态检查。
+
+    运行时编译意味着"写错了"要到游戏跑起来才知道 —— 而 mod 作者可能根本不开游戏，
+    只改了 TOML。所以能在编译期抓住的错，一律在这里抓住：
+
+      * 源码文件存不存在（最常见：路径写错、忘了把 .gd 一起拷进来）
+      * 声明的事件在不在契约里（拼错一个字母，那个钩子就永远不会触发，且毫无提示）
+      * 文件里有没有 `func handle(` —— 没有入口函数，加载器只会静默跳过
+
+    第三条是文本匹配，看着粗糙，但它挡掉的是 mod 开发里最高频的错误，
+    而且比启动一次引擎便宜三个数量级。
+    """
+    seen_hooks: dict[str, str] = {}
+
+    for cid, body in resolved.items():
+        if body.get("kind") != "script":
+            continue
+        src = body.get("_source", cid)
+        source = body.get("source")
+        events = body.get("events")
+
+        if not isinstance(source, str) or not source.endswith(".gd"):
+            errors.append(f"{src}: `source` 必须是 .gd 文件路径")
+            continue
+        path = Path(source) if Path(source).is_absolute() else ROOT / source
+        if not path.exists():
+            errors.append(f"{src}: 找不到脚本 `{source}`")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "func handle(" not in text:
+            errors.append(f"{src}: `{source}` 里没有 `func handle(event, ctx, api)`，加载器无法调用它")
+
+        if not isinstance(events, list) or not events:
+            errors.append(f"{src}: `events` 必须是非空数组（否则这个 mod 挂了也不会被调用）")
+            continue
+        for e in events:
+            if not isinstance(e, str):
+                errors.append(f"{src}: `events` 里出现非字符串 {e!r}")
+                continue
+            if e not in HOOKS:
+                errors.append(
+                    f"{src}: 钩子 `{e}` 未注册（已注册：{', '.join(sorted(HOOKS))}）"
+                )
+                continue
+            if e in seen_hooks:
+                warnings.append(
+                    f"{src}: 钩子 `{e}` 已经由 `{seen_hooks[e]}` 挂载，两个 mod 会同时收到"
+                )
+            else:
+                seen_hooks[e] = cid
+
+
 # --------------------------------------------------------------------------
 # 4. 打包
 # --------------------------------------------------------------------------
@@ -353,6 +410,15 @@ def build_schema() -> dict:
         "loot_tables": list(LOOT_TABLES),
         "meshes": dict(MESHES),
         "palettes": {n: list(c) for n, c in sorted(PALETTES.items())},
+        "hooks": {
+            n: {
+                "doc": HOOKS[n].doc,
+                "params": list(HOOKS[n].params),
+                "returns": list(HOOKS[n].returns),
+                "blocking": HOOKS[n].blocking,
+            }
+            for n in sorted(HOOKS)
+        },
     }
 
 
@@ -397,6 +463,7 @@ def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
         validate(cid, body, errors)
 
     semantic_checks(resolved, errors, warnings)
+    check_scripts(resolved, errors, warnings)
 
     counts: dict[str, int] = {}
     for body in resolved.values():

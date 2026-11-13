@@ -57,9 +57,26 @@ class SystemSpec:
     fn: Callable | None = None
 
 
+@dataclass(frozen=True)
+class HookSpec:
+    """一个事件钩子的完整契约。
+
+    params  承诺给 mod 的上下文字段。少一个 = 引擎违约，mod 会读到 null。
+    returns 引擎会读的返回值。空 = 这个事件只能"看"，不能改变什么。
+    blocking  True 表示这个事件可以被否决（返回 allow=false 就到此为止）。
+    """
+
+    name: str
+    doc: str
+    params: tuple[str, ...] = ()
+    returns: tuple[str, ...] = ()
+    blocking: bool = False
+
+
 COMPONENTS: dict[str, ComponentSpec] = {}
 KINDS: dict[str, KindSpec] = {}
 SYSTEMS: list[SystemSpec] = []
+HOOKS: dict[str, HookSpec] = {}
 
 # 行为注册表：数据里只能引用已注册的 brain，不能凭空写字符串
 BRAINS: tuple[str, ...] = ("idle", "patrol", "charger", "ambusher")
@@ -102,6 +119,19 @@ def kind(name: str, doc: str = "", require: Iterable[str] = ()) -> None:
     if name in KINDS:
         raise RuntimeError(f"内容类型 `{name}` 重复注册")
     KINDS[name] = KindSpec(name, doc, tuple(require))
+
+
+def hook(name: str, doc: str, params: Iterable[str] = (), returns: Iterable[str] = (),
+         blocking: bool = False) -> None:
+    """注册一个事件钩子。名字用 `域.动作` 形式，全小写。
+
+    钩子是**行为开放的唯一入口**：mod 能看见什么、能改什么，全部由这张表决定。
+    表里没有的事件，引擎不会发；表里没声明的返回值，引擎不会读。
+    这条约束让"引擎能提供哪些介入点"变成一个可审阅的清单，而不是散在代码里的字符串。
+    """
+    if name in HOOKS:
+        raise RuntimeError(f"钩子 `{name}` 重复注册")
+    HOOKS[name] = HookSpec(name, doc, tuple(params), tuple(returns), blocking)
 
 
 def system(name: str, priority: int, reads: Iterable[str] = (), writes: Iterable[str] = ()):
@@ -283,7 +313,59 @@ component(
     prompt=Field("str", "", doc="提示文案"),
 )
 
+# --------------------------------------------------------------------------
+# 事件钩子声明。加一个钩子 = 在这里加一段，同时引擎必须真的会发它。
+#
+# 自检要求两边**完全相等**（契约声明 == 引擎发出）。只声明不发是撒谎，
+# 只发不声明是绕过契约 —— 两种都算失败。
+# --------------------------------------------------------------------------
+
+hook(
+    "world.ready",
+    "世界装配完成、玩家已就位。mod 做一次性初始化的地方。",
+    params=("rooms", "entities", "player_pos"),
+)
+
+hook(
+    "entity.spawn",
+    "一个刚体进入世界。静态合批的实例不发这个事件——它们没有独立身份。",
+    params=("id", "handle", "pos"),
+)
+
+hook(
+    "grab.request",
+    "玩家试图抓起某个物体。可以否决，也可以改变持握距离。",
+    params=("id", "handle", "mass", "pos"),
+    returns=("allow", "hold"),
+    blocking=True,
+)
+
+hook(
+    "grab.release",
+    "松手或抛出。thrown=false 表示是放下，不是扔。",
+    params=("id", "handle", "speed", "thrown"),
+)
+
+hook(
+    "impact",
+    "刚体撞到东西。speed 是撞击前一帧的速度，不是撞完的残余速度。",
+    params=("id", "handle", "speed", "pos"),
+)
+
+hook(
+    "tick",
+    "固定节拍（每 0.25 秒一次），不是每帧。给 mod 一个便宜的『我还活着』的机会。",
+    params=("dt", "frame"),
+)
+
+
 kind("archetype", "世界里被摆放的东西：怪、道具、装饰", require=("name",))
 kind("item", "背包里的东西", require=("name",))
 kind("room", "一个空间单元", require=("name",))
 kind("patch", "覆写别人的内容（mod 专用）", require=("target",))
+kind(
+    "script",
+    "行为 mod。声明源码位置和它要挂的事件，引擎运行时编译并绑定。"
+    "events 是**权限清单**：没写进这里的事件，引擎不会转给它。",
+    require=("name", "source", "events"),
+)

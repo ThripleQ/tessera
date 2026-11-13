@@ -13,6 +13,7 @@
   R4 引擎层不认内容 id   AGENTS.md 铁律 2  ← 这条是架构的命根子
   R5 依赖方向            structure.md 四
   R6 生成物进版本库      AGENTS.md 六
+  R7 运行时编译只有一个入口 ADR 0007 / AGENTS.md 铁律 9
 
 用法：
     python3 tools/lint_arch.py                       # 默认读 build/content.pack.json
@@ -182,6 +183,25 @@ def check_generated_in_vcs(f: Findings) -> None:
             f.add("R6", bad, "生成物被提交进版本库，应由 ./check.sh 生成并 gitignore")
 
 
+# ---------------------------------------------------------------- R7
+def check_single_mod_entry(f: Findings, gd_files: list[Path]) -> None:
+    """运行时编译 GDScript 的能力只能有一个入口：`scripts/mods/`。
+
+    这是整个引擎里唯一"能凭空造出代码"的地方。它散落到第二个文件，
+    就等于多了一个从外部注入代码的路径，而且是没人审查过的那条。
+    将来做 mod 授权 UI，只需要守这一个点。
+    """
+    allow_dir = SCRIPTS / "mods"
+    for p in gd_files:
+        if allow_dir in p.parents:
+            continue
+        for line in code_lines(p):
+            if "GDScript.new(" in line:
+                f.add("R7", rel(p), "只有 scripts/mods/ 可以运行时编译 GDScript"
+                                    "（ADR 0007：代码注入点必须只有一个）")
+                break
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pack", default="build/content.pack.json")
@@ -201,6 +221,7 @@ def main() -> int:
     check_engine_knows_content(f, gd_files, ROOT / args.pack)
     check_dependency_direction(f, gd_files)
     check_generated_in_vcs(f)
+    check_single_mod_entry(f, gd_files)
 
     print(f"架构纪律：{len(gd_files)} 个 .gd，{len(walk_files(ROOT / 'tools', ('.py',)))} 个工具")
 
@@ -210,7 +231,8 @@ def main() -> int:
         return 1
 
     if f.empty():
-        print("全部通过（R1 目录名 / R2 文件长度 / R3 域大小 / R4 引擎不认内容 / R5 依赖方向 / R6 生成物）")
+        print("全部通过（R1 目录名 / R2 文件长度 / R3 域大小 / R4 引擎不认内容 /"
+              " R5 依赖方向 / R6 生成物 / R7 mod 唯一入口）")
         return 0
 
     print(f"\n违反 {len(f.items)} 处：\n")
@@ -243,6 +265,7 @@ def run_selftest() -> int:
         make("long.gd", "extends Node\n" + "var a := 1\n" * 420)                # R2
         make("knows_content.gd", 'extends Node\nvar who := "enemy/bone_walker"\n')  # R4
         make("dep.gd", "extends Node\nconst P := 'contract/registry.py'\n")     # R5
+        make("injects.gd", "extends Node\nvar s := GDScript.new()\n")            # R7
         for i in range(13):                                                     # R3
             make(f"filler_{i:02d}.gd", "extends Node\n")
 
@@ -257,6 +280,7 @@ def run_selftest() -> int:
             "R3": "> 12 上限",
             "R4": "enemy/bone_walker",
             "R5": "引用了 contract/",
+            "R7": "运行时编译 GDScript",
         }
         missing = [k for k, needle in expect.items() if needle not in out]
         print(out.strip())
@@ -267,7 +291,7 @@ def run_selftest() -> int:
         if missing:
             print(f"✗ 自测失败：这些规则没触发 {missing}")
             return 1
-        print("自测通过：R1/R2/R3/R4/R5 都能抓到违规")
+        print("自测通过：R1/R2/R3/R4/R5/R7 都能抓到违规")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

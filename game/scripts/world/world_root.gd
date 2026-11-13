@@ -12,14 +12,27 @@ const SOLIDS = preload("res://scripts/physics/solids.gd")
 ## 超过这个距离的块整体不画。第一级剔除，粒度就是块。
 const VISIBLE_RANGE := 120.0
 
+## 撞击事件的门槛。太轻的接触不发 —— 事件也要按预算来，
+## 否则一堆箱子互相靠着就能把每帧事件额度吃光。
+const IMPACT_MIN_SPEED := 2.0
+
 var chunks: Dictionary = {}
+## 有独立物理身份的东西。mod 通过 handle 认出它们，但它们本身不知道 mod 存在。
+var bodies: Array[RigidBody3D] = []
+
+## 由 main 注入。为空时世界照常跑 —— 没有 mod 的平台也必须能玩。
+var bus = null
+var api = null
+
 var _camera: Camera3D = null
 var _rooms_with_rigid: Array[String] = []
+var _speeds: Dictionary = {}
 
 
 func realize(plan) -> void:
 	_add_ground(plan)
 	_rooms_with_rigid.clear()
+	bodies.clear()
 
 	for room_id in plan.rooms:
 		var room: Dictionary = plan.rooms[room_id]
@@ -29,10 +42,13 @@ func realize(plan) -> void:
 		chunk.bounds = room["bounds"]
 		chunk.floor_size = room["floor_size"]
 		var has_rigid := false
+		var pending: Array = []
 		for item in room["items"]:
 			if item["dynamic"]:
 				# 刚体挂在块下，跟着块一起进退；但它自己一格渲染，不参与合批。
-				chunk.add_child(SOLIDS.make_dynamic(item))
+				var rb: RigidBody3D = SOLIDS.make_dynamic(item)
+				chunk.add_child(rb)
+				pending.append({"body": rb, "item": item})
 				has_rigid = true
 				continue
 			chunk.add_instance(item)
@@ -44,9 +60,45 @@ func realize(plan) -> void:
 		add_child(chunk)
 		chunk.realize()
 
+		# 登记必须在入树之后：handle 是给 mod 用的，而 mod 拿到的第一个位置
+		# 就已经是世界坐标了，不能是块内坐标。
+		for p in pending:
+			_register_body(p["body"], p["item"])
+
 		var floor_origin := Vector3(room["bounds"].position.x, 0.0, room["bounds"].position.z)
 		chunk.add_child(SOLIDS.make_floor(floor_origin, room["floor_size"]))
 		chunks[room_id] = chunk
+
+
+func _register_body(rb: RigidBody3D, item: Dictionary) -> void:
+	bodies.append(rb)
+	var h: int = api.register(rb, String(item.get("id", ""))) if api != null else 0
+	rb.set_meta("handle", h)
+	rb.contact_monitor = true
+	rb.max_contacts_reported = 2
+	rb.body_entered.connect(_on_body_entered.bind(rb))
+	if bus != null:
+		bus.emit("entity.spawn", {
+			"id": String(item.get("id", "")),
+			"handle": h,
+			"pos": rb.global_position,
+		})
+
+
+## 撞击事件。速度取的是**上一物理帧**的值 —— 信号到达时接触已经被解算，
+## 此刻 linear_velocity 往往已经归零，用它算出来的撞击永远是 0。
+func _on_body_entered(other: Node, rb: RigidBody3D) -> void:
+	var spd: float = float(_speeds.get(rb, 0.0))
+	if spd < IMPACT_MIN_SPEED:
+		return
+	if bus == null:
+		return
+	bus.emit("impact", {
+		"id": String(rb.get_meta("content_id", "")),
+		"handle": int(rb.get_meta("handle", 0)),
+		"speed": spd,
+		"pos": rb.global_position,
+	})
 
 
 ## 开场该站在哪。优先选有刚体的房间 —— 玩家第一眼就该看到"东西会动"，
@@ -111,3 +163,11 @@ func _process(_delta: float) -> void:
 		var c: Vector3 = chunk.bounds.get_center()
 		var d := Vector2(c.x - _camera.position.x, c.z - _camera.position.z).length()
 		chunk.visible = d <= VISIBLE_RANGE
+
+
+## 记录每个刚体的速度。这不是"为了撞击事件多跑一趟"——
+## 接触信号到达时速度已经被解算掉了，没有这一帧的缓存，撞击永远读到 0。
+func _physics_process(_delta: float) -> void:
+	for rb in bodies:
+		if is_instance_valid(rb):
+			_speeds[rb] = rb.linear_velocity.length()

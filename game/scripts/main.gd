@@ -14,11 +14,24 @@ const PLAN_SCRIPT = preload("res://scripts/world/plan.gd")
 const WORLD_SCRIPT = preload("res://scripts/world/world_root.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const PLAYER_SCRIPT = preload("res://scripts/player/player.gd")
+const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
+const API_SCRIPT = preload("res://scripts/hooks/api.gd")
+const LOADER = preload("res://scripts/mods/loader.gd")
 
 const PACK_PATH := "res://content.pack.json"
 
+## tick 的固定节拍。mod 拿不到每帧的机会 —— 那是帧率的敌人，
+## 而且绝大多数 mod 想做的事（计时、巡视、状态更新）0.25 秒完全够。
+const TICK_INTERVAL := 0.25
+
 var pack
 var plan
+var bus
+var api
+var mods: Dictionary = {}
+
+var _tick_acc := 0.0
+var _frames := 0
 
 
 func _ready() -> void:
@@ -35,6 +48,21 @@ func _ready() -> void:
 	plan.build(pack)
 	print(plan.summary())
 
+	# 总线先而立：事件声明的唯一来源是契约快照，不是代码里的字符串。
+	bus = BUS_SCRIPT.new(pack.schema.get("hooks", {}))
+	api = API_SCRIPT.new(pack)
+	bus.api = api
+	print(bus.summary())
+
+	# 加载 mod 必须在建世界之前。entity.spawn 从第一个刚体就开始发，
+	# 晚一步加载就会漏掉整局的第一次生成，而且没有任何提示。
+	mods = LOADER.load_all(pack, LOADER.content_root(), bus)
+	for line in mods["loaded"]:
+		print("mod 载入：%s" % line)
+	for e in mods["errors"]:
+		printerr("mod 加载失败：%s" % e)
+	print(bus.summary())
+
 	if selftest:
 		var ok: bool = _selftest()
 		get_tree().quit(0 if ok else 1)
@@ -45,6 +73,24 @@ func _ready() -> void:
 
 func _selftest() -> bool:
 	var ok := true
+
+	# 钩子：契约声明的 == 引擎真发的。
+	# 只声明不发是撒谎（mod 挂了钩子永远等不到），只发不声明是绕过契约。
+	# 这条检查的价值不在于今天，而在于以后有人加了钩子却忘了接线的那一刻。
+	var declared := PackedStringArray(pack.schema.get("hooks", {}).keys())
+	declared.sort()
+	var emitted := PackedStringArray(BUS_SCRIPT.EMITTED)
+	emitted.sort()
+	if declared != emitted:
+		printerr("自检失败：钩子声明与引擎发出不一致\n  契约：%s\n  引擎：%s"
+			% [", ".join(declared), ", ".join(emitted)])
+		ok = false
+
+	# mod 编译失败必须在 CI 就暴露。玩家装了个坏 mod 当然会炸，
+	# 但我们自己仓库里的 mod 挂了却一路绿灯，那才是灾难。
+	for e in mods.get("errors", []):
+		printerr("自检失败：mod 加载错误 —— %s" % e)
+		ok = false
 
 	# 边界校验：内容用到的每个组件，契约里必须声明过。
 	# 编译期已经查过一遍，这里再查是防"旧 pack 配新引擎"这类错配 ——
@@ -88,6 +134,8 @@ func _selftest() -> bool:
 	print("网格实现 %d / 契约 %d 种" % [MESH_LIB.implemented().size(), declared_meshes.size()])
 	print("物理：刚体 %d / 障碍 %d / 地板 %d 块"
 		% [plan.dynamic_count(), plan.solid_static_count(), plan.rooms.size()])
+	print("行为：mod %d 个（%d 处挂载）/ 契约钩子 %d 个"
+		% [mods.get("files", 0), bus.handler_count(), declared.size()])
 	if ok:
 		print("自检通过")
 	return ok
@@ -100,14 +148,40 @@ func _setup_scene() -> void:
 
 	var world = WORLD_SCRIPT.new()
 	world.name = "world"
+	world.bus = bus
+	world.api = api
+	# mod 造出来的东西挂在世界下，跟着世界一起释放。
+	api.attach_world(world)
 	add_child(world)
 	world.realize(plan)
 
 	var player = PLAYER_SCRIPT.new()
 	player.name = "player"
+	# 注入必须在入树之前：_ready 里要拿它们初始化抓取器。
+	# 组件之间不互相伸手，依赖由装配层给。
+	player.hooks = bus
+	player.api = api
 	add_child(player)
 	player.position = _start_position(world)
 	world.attach_camera(player.camera())
+
+	# 世界就绪：刚体已全部生成，玩家已就位。mod 在这里做一次性初始化。
+	bus.emit("world.ready", {
+		"rooms": plan.rooms.size(),
+		"entities": plan.instance_count(),
+		"player_pos": player.global_position,
+	})
+
+
+## 固定节拍的 tick。用累加器而不是"每 N 帧"，因为帧率会变，节拍不该跟着变。
+func _process(delta: float) -> void:
+	if bus == null:
+		return
+	_tick_acc += delta
+	while _tick_acc >= TICK_INTERVAL:
+		_tick_acc -= TICK_INTERVAL
+		_frames += 1
+		bus.emit("tick", {"dt": TICK_INTERVAL, "frame": _frames})
 
 
 ## 卡通渲染要的是"天光充足、阴影明确"，不是写实的那种暗调氛围。

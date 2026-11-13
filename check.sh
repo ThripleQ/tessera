@@ -14,10 +14,10 @@ step "1/4 编译内容（解析 → 继承 → 校验 → 产物）"
 python3 tools/contentc.py --content content --content mods \
     --out build/content.pack.json --bin build/content.pack.bin --report || fail=1
 
-step "2/4 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向）"
+step "2/4 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
 # 先验证检查器本身没退化成"永远通过"，再跑真正的检查。
 if python3 tools/lint_arch.py --selftest > build/lint_selftest.log 2>&1; then
-    echo "检查器自测：通过（R1-R5 每条都能抓到违规）"
+    echo "检查器自测：通过（R1-R7 每条都能抓到违规）"
 else
     tail -40 build/lint_selftest.log
     fail=1
@@ -28,6 +28,9 @@ step "3/4 同步内容包到 Godot 工程"
 cp build/content.pack.json game/content.pack.json || fail=1
 
 step "4/4 Godot 无头自检"
+# 行为 mod 的源码是运行时从磁盘编译的，根目录得显式给 —— 否则 CI 里找不到文件，
+# 而本地能跑通，是最难查的一种不一致。
+export TESSERA_ROOT="$(pwd)"
 if [ ! -x "$GODOT" ]; then
     echo "找不到引擎：$GODOT"
     echo "下载见 README「准备引擎」，或用 GODOT=/path/to/godot ./check.sh"
