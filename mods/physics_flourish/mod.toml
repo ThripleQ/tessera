@@ -1,0 +1,13 @@
+[mod]
+id = "physics_flourish"
+name = "物理余韵"
+version = "1.0.0"
+api_version = 1
+author = "tessera 官方示例"
+level = "script"
+description = """
+给物理加一点情绪：扔出去的东西会发烫，砸到东西会闪一下，几拍之后恢复原色。
+
+这个 mod 的存在意义不是好玩，是**证明行为开放真的通了**。
+它同时用到了钩子的四种能力，见 content/behavior.toml 里的说明。
+"""

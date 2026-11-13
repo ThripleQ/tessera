@@ -1,0 +1,13 @@
+[mod]
+id = "hard_mode"
+name = "困难模式"
+version = "1.0.0"
+api_version = 1
+author = "tessera 官方示例"
+level = "data"
+description = """
+不改一行代码、不重新编译引擎，把所有敌人的血量乘 1.6、仇恨半径加 4 米。
+
+这是一个 **data 级** mod：它只有内容，没有任何脚本，所以默认放行，
+不需要玩家授权。对比 physics_flourish（script 级，必须授权）就能看出分级的意义。
+"""

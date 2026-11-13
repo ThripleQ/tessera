@@ -23,6 +23,7 @@ import argparse
 import copy
 import fnmatch
 import json
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -39,6 +40,7 @@ from contract.registry import (  # noqa: E402
     KINDS,
     LOOT_TABLES,
     MESHES,
+    MOD_LEVELS,
     PALETTES,
     SUPPORTED_API,
     check_value,
@@ -48,6 +50,14 @@ ALLOWED_TOP = {
     "api_version", "id", "kind", "extends", "name", "doc", "tags",
     "components", "target", "source", "events",
 }
+
+## mod.toml 的 [mod] 段允许哪些字段。
+## 白名单而不是黑名单：把 `levle` 拼错成 data 会让授权保护静默失效，
+## 而拼错字段名是 mod 开发里最高的错误率来源之一。
+ALLOWED_MOD = {"id", "name", "version", "api_version", "level", "author", "description"}
+MOD_REQUIRED = ("id", "name", "version", "api_version", "level")
+## mod id 会成为目录名、存档键、日志前缀，所以只允许扁平的 ASCII。
+MOD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 OPS = ("set", "mul", "add")
 
 
@@ -319,7 +329,12 @@ def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list
             pass
 
 
-def check_scripts(resolved: dict[str, dict], errors: list[str], warnings: list[str]) -> None:
+def check_scripts(
+    resolved: dict[str, dict],
+    errors: list[str],
+    warnings: list[str],
+    script_root: Path | None = None,
+) -> None:
     """行为 mod 的静态检查。
 
     运行时编译意味着"写错了"要到游戏跑起来才知道 —— 而 mod 作者可能根本不开游戏，
@@ -331,7 +346,11 @@ def check_scripts(resolved: dict[str, dict], errors: list[str], warnings: list[s
 
     第三条是文本匹配，看着粗糙，但它挡掉的是 mod 开发里最高频的错误，
     而且比启动一次引擎便宜三个数量级。
+
+    script_root：源码路径相对于谁。基础内容是仓库根；mod 是自己的目录
+    （mod 是可独立发布的单元，它不该知道仓库长什么样）。
     """
+    root = script_root if script_root is not None else ROOT
     seen_hooks: dict[str, str] = {}
 
     for cid, body in resolved.items():
@@ -344,9 +363,9 @@ def check_scripts(resolved: dict[str, dict], errors: list[str], warnings: list[s
         if not isinstance(source, str) or not source.endswith(".gd"):
             errors.append(f"{src}: `source` 必须是 .gd 文件路径")
             continue
-        path = Path(source) if Path(source).is_absolute() else ROOT / source
+        path = Path(source) if Path(source).is_absolute() else root / source
         if not path.exists():
-            errors.append(f"{src}: 找不到脚本 `{source}`")
+            errors.append(f"{src}: 找不到脚本 `{source}`（找的是 {path}）")
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if "func handle(" not in text:
@@ -422,7 +441,9 @@ def build_schema() -> dict:
     }
 
 
-def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
+def build_pack(
+    dirs: list[str], script_root: Path | None = None
+) -> tuple[dict, list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -463,7 +484,7 @@ def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
         validate(cid, body, errors)
 
     semantic_checks(resolved, errors, warnings)
-    check_scripts(resolved, errors, warnings)
+    check_scripts(resolved, errors, warnings, script_root)
 
     counts: dict[str, int] = {}
     for body in resolved.values():
@@ -480,6 +501,185 @@ def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
         "patch_summary": [{"file": rel(d.path), "target": d.raw.get("target"), "hits": d.hits} for d in patches],
     }
     return pack, errors, warnings
+
+
+# --------------------------------------------------------------------------
+# 5. mod 编译
+# --------------------------------------------------------------------------
+
+
+def _public(body: dict) -> dict:
+    """去掉编译器的内部字段（`_source` 之类），用来比较两份实体是否等价。
+
+    内部字段带的是本机路径，跨机器、跨目录都会变 —— 拿它参与比较会让
+    "内容没改"被误判成"改了"，产出的 diff 里全是噪音。
+    """
+    return {k: v for k, v in body.items() if not k.startswith("_")}
+
+
+def build_mod(
+    mod_dir: Path, base_dirs: list[str] | None = None
+) -> tuple[dict | None, list[str], list[str]]:
+    """把一个 mod 目录编译成一个自包含的运行时产物。
+
+    mod 是**可独立发布的单元**：一个目录，拷进去就能用，不依赖仓库里的别的东西。
+    所以它有自己的一步编译，产物落在 `content.pack.json`，引擎只读那个文件。
+
+    为什么不让引擎直接读 mod 的 TOML：那等于在引擎里再写一个 TOML 解析器，
+    于是有两份编译器、两套行为，迟早不一致。作者写 TOML（人手舒服），
+    产物是 JSON（机器原生），中间那层永远只有 Python 这一份。
+
+    **patch 型 mod 需要 base**：`kind="patch"` 的语义是"作用在已解析完继承链的
+    实体上"，所以它必须能看见基线内容。这里把 base 编译一遍、把 mod 编译一遍，
+    然后把两者的差异作为产物 —— 于是 mod 的产物永远是"它改变了什么"，
+    而不是"它抄了一份整个世界"。也正因此，多个 mod 可以叠加。
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    manifest = mod_dir / "mod.toml"
+    if not manifest.exists():
+        return None, [f"{rel(mod_dir)}: 缺少 mod.toml（一个 mod 最少要有它）"], warnings
+    try:
+        raw = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        return None, [f"{rel(manifest)}: TOML 解析失败 —— {e}"], warnings
+
+    meta = raw.get("mod")
+    if not isinstance(meta, dict):
+        return None, [f"{rel(manifest)}: 必须有 [mod] 段"], warnings
+
+    for k in sorted(meta):
+        if k not in ALLOWED_MOD:
+            errors.append(
+                f"{rel(manifest)}: [mod] 里不认识 `{k}`"
+                f"（允许：{', '.join(sorted(ALLOWED_MOD))}）"
+            )
+    for k in MOD_REQUIRED:
+        if k not in meta:
+            errors.append(f"{rel(manifest)}: [mod] 缺字段 `{k}`")
+
+    mid = str(meta.get("id", ""))
+    if not MOD_ID_RE.match(mid):
+        errors.append(
+            f"{rel(manifest)}: id `{mid}` 不合法（小写字母或数字开头，可含 - _，2-32 字符）"
+        )
+    elif mid != mod_dir.name:
+        warnings.append(
+            f"{rel(manifest)}: id `{mid}` 与目录名 `{mod_dir.name}` 不同"
+            "（允许，但装进 mods/ 之后不容易找）"
+        )
+
+    api = meta.get("api_version")
+    if api not in SUPPORTED_API:
+        errors.append(
+            f"{rel(manifest)}: api_version {api!r} 不在支持范围 {sorted(SUPPORTED_API)} —— "
+            "这个 mod 是给别的版本写的"
+        )
+
+    declared = str(meta.get("level", ""))
+    if declared not in MOD_LEVELS:
+        errors.append(
+            f"{rel(manifest)}: level `{declared}` 不合法（允许：{', '.join(sorted(MOD_LEVELS))}）"
+        )
+
+    content_dir = mod_dir / "content"
+    base = [d for d in (base_dirs or []) if Path(d).is_dir()]
+    if content_dir.is_dir():
+        inputs = base + [str(content_dir)]
+        pack, e, w = build_pack(inputs, script_root=mod_dir)
+    else:
+        pack = {"counts": {}, "entities": {}, "warnings": []}
+        e, w = [], []
+        warnings.append(f"{rel(mod_dir)}: 没有 content/ 目录，这个 mod 不添加任何内容")
+    errors += e
+    warnings += w
+
+    # 只留下"这个 mod 改变了什么"。基线编译的结果里可能有它自己的错误
+    # （内容层坏了会先在 check.sh 第 1 步报出来），这里不再重复报。
+    changed: dict[str, dict] = {}
+    if base:
+        baseline, _, _ = build_pack(base)
+        for cid, body in pack["entities"].items():
+            old = baseline["entities"].get(cid)
+            if old is None or _public(old) != _public(body):
+                changed[cid] = body
+    else:
+        changed = dict(pack["entities"])
+    pack["entities"] = changed
+    # counts 必须按 diff 重算，不能沿用全量那份 —— 否则一个只改了两个敌人的
+    # mod 会声称自己带了几百条内容，而"内容量"是这个项目所有预算判断的分子。
+    counts: dict[str, int] = {}
+    for body in changed.values():
+        counts[body["kind"]] = counts.get(body["kind"], 0) + 1
+    pack["counts"] = counts
+
+    script_ids = [cid for cid, b in changed.items() if b.get("kind") == "script"]
+    scripts_dir = mod_dir / "scripts"
+    has_gd = scripts_dir.is_dir() and any(scripts_dir.rglob("*.gd"))
+
+    # **实际级别由"有没有可执行代码"决定，不由作者声明决定。**
+    # 作者完全可以把带脚本的 mod 写成 level="data" 来绕过玩家授权 ——
+    # 如果引擎相信声明，那道授权闸门就是纸做的。所以这里算一遍真实的，
+    # 引擎侧还会再独立算一遍（不信任产物，产物也可能被手改）。
+    actual = "script" if (script_ids or has_gd) else "data"
+    if declared == "data" and actual == "script":
+        warnings.append(
+            f"{rel(manifest)}: 声明 data 级但带了脚本，按 script 级处理"
+            "（否则声明就成了绕过授权的办法）"
+        )
+    if declared == "script" and actual == "data":
+        warnings.append(f"{rel(manifest)}: 声明 script 级但没有脚本，按 data 级处理")
+    if has_gd and not script_ids:
+        warnings.append(
+            f"{rel(mod_dir)}: scripts/ 下有 .gd，但内容里没有任何 kind=\"script\" 绑定 —— "
+            "这些脚本永远不会被加载"
+        )
+
+    if errors:
+        return None, errors, warnings
+
+    product = {
+        "api_version": 1,
+        "mod": {
+            "id": mid,
+            "name": str(meta.get("name", mid)),
+            "version": str(meta.get("version", "0.0.0")),
+            "author": str(meta.get("author", "")),
+            "description": str(meta.get("description", "")),
+            "level": actual,
+            "declared_level": declared,
+        },
+        "counts": pack["counts"],
+        "entities": pack["entities"],
+        "warnings": pack["warnings"],
+    }
+    return product, errors, warnings
+
+
+def compile_one_mod(mod_dir: Path, base_dirs: list[str] | None = None) -> int:
+    if not mod_dir.is_absolute():
+        mod_dir = (Path.cwd() / mod_dir).resolve()
+    product, errors, warnings = build_mod(mod_dir, base_dirs)
+    name = mod_dir.name
+
+    for w in warnings:
+        print(f"  ! {w}", file=sys.stderr)
+    if errors or product is None:
+        print(f"\nmod `{name}` 编译失败，{len(errors)} 个问题：\n", file=sys.stderr)
+        for e in errors:
+            print(f"  ✗ {e}", file=sys.stderr)
+        print("\n没有产出 content.pack.json。修好再来。", file=sys.stderr)
+        return 1
+
+    out = mod_dir / "content.pack.json"
+    out.write_text(json.dumps(product, ensure_ascii=False, indent=1), encoding="utf-8")
+    meta = product["mod"]
+    print(
+        f"OK  mod `{meta['id']}` v{meta['version']} [{meta['level']}]  "
+        f"{sum(product['counts'].values())} 条 -> {rel(out)}"
+    )
+    return 0
 
 
 def emit_docs(path: Path) -> None:
@@ -578,12 +778,22 @@ def emit_binary(pack: dict, path: Path, quiet: bool = False) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="内容编译器")
-    ap.add_argument("--content", action="append", required=True, help="内容目录，可多次指定，顺序即加载顺序（后者覆盖前者）")
+    ap.add_argument("--content", action="append", default=None, help="内容目录，可多次指定，顺序即加载顺序（后者覆盖前者）")
+    ap.add_argument("--mod", default=None, help="编译单个 mod 目录：读 mod.toml + content/，产出 <dir>/content.pack.json")
+    ap.add_argument("--base", action="append", default=None, help="mod 的基线内容目录（patch 型 mod 需要）。默认 content")
     ap.add_argument("--out", default="build/content.pack.json")
     ap.add_argument("--bin", default=None, help="顺带输出给 C++ 运行时读的二进制包")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--docs", default=None, help="顺带生成组件参考文档")
     args = ap.parse_args()
+
+    if args.mod and args.content:
+        ap.error("--mod 与 --content 不能同时用：mod 有自己的一步编译，产物在它自己的目录里")
+    if args.mod:
+        base = args.base if args.base else ["content"]
+        return compile_one_mod(Path(args.mod), base)
+    if not args.content:
+        ap.error("要么 --content <dir>（基础内容），要么 --mod <dir>（单个 mod）")
 
     pack, errors, warnings = build_pack(args.content)
 

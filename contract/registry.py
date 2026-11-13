@@ -8,8 +8,8 @@
   * 未来的编辑器读它 -> 自动补全和属性面板零成本
 
 新增能力的正确姿势（只有这两处）：
-  1. 在这里 register 一个组件 / 一种行为 / 一个网格
-  2. 在 runtime/systems.py 里注册一个消费它的系统
+  1. 在这里 register 一个组件 / 一种行为 / 一个网格 / 一个钩子
+  2. 在 game/scripts/ 里实现消费它的那一层，并把「契约 vs 实测」写进自检
 
 除此之外任何地方加"特例"，都是在关闭这个架构。
 """
@@ -20,6 +20,16 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 SUPPORTED_API = {1}
+
+## mod 的两个级别。引擎真的按它分流，不是文档里的一句话。
+##
+## 为什么必须分两级：Godot 没有 GDScript 沙箱（实测 mod 里 OS.execute 返回 0，
+## 见 ADR 0003）。既然拦不住"能干什么"，就只能在"能不能进来"上做区分，
+## 而那个区分必须让玩家看得见、并且由玩家按下开关。
+MOD_LEVELS: dict[str, str] = {
+    "data": "只改内容与外观，不执行代码。默认放行",
+    "script": "带脚本，运行时编译，完全权限。必须玩家显式授权",
+}
 
 
 @dataclass(frozen=True)

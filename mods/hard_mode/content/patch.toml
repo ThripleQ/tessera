@@ -1,0 +1,19 @@
+api_version = 1
+kind = "patch"
+target = "enemy/*"
+name = "困难模式"
+tags = ["hardmode"]
+doc = """
+patch 的语义：作用在"已经解析完继承链的最终实体"上，
+因此不会沿着 extends 向下传播 —— 想影响整个族群就把 target 写成通配符。
+
+编译这个 mod 时会把基线内容也编译一遍，所以产物里是**被改过的那几个实体的
+完整副本**，而不是一份 patch 指令。运行时只做"按 id 覆盖"这一件事，
+不需要在引擎里实现第二套 patch 求值器。
+"""
+
+[components.health]
+max = { mul = 1.6 }
+
+[components.ai]
+aggro_radius = { add = 4.0 }

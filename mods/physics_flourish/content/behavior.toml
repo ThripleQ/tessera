@@ -1,0 +1,18 @@
+api_version = 1
+kind = "script"
+name = "物理余韵"
+## 路径相对**本 mod 目录**，不相对仓库根。
+## mod 是可独立发布的单元：它不知道、也不该知道仓库长什么样。
+source = "scripts/physics_flourish.gd"
+events = ["grab.request", "grab.release", "impact", "tick"]
+doc = """
+把行为挂到四个钩子上，四种能力各用一次：
+
+  grab.request  改返回值 → 影响引擎行为（把持握距离从 2.3 改到 1.9）
+  grab.release  读事件参数 → 只有扔得够快才生效，放下不动
+  impact        读引擎采样出来的速度（上一物理帧，不是撞完的残余）
+  tick          证明固定节拍真的在跑，且能自己攒状态（倒计时）
+
+它还调了 api.tint / api.reset_tint —— 说明 mod 能改变世界的样子，
+而拿不到任何节点、任何 Transform3D。接口只有动词。
+"""
