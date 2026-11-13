@@ -61,6 +61,15 @@ func count() -> int:
 	return _bodies.size()
 
 
+## 世界里的刚体被整体换掉之后调用（读档）。旧 handle 必须全部作废 ——
+## 留着它们意味着 mod 调 api.pos(h) 会去读一个已经释放的对象。
+## _next 不回退：handle 单调递增，mod 不可能拿旧 handle 撞上新物体。
+func forget_all() -> void:
+	_bodies.clear()
+	_ids.clear()
+	_base_color.clear()
+
+
 func exists(handle: int) -> bool:
 	var b = _bodies.get(handle, null)
 	return b != null and is_instance_valid(b)
@@ -159,19 +168,11 @@ func spawn(content_id: String, at: Vector3, yaw: float = 0.0) -> int:
 		return 0
 	if not _pack.entities.has(content_id):
 		return 0
-	var comps: Dictionary = _pack.entities[content_id].get("components", {})
-	var model: Dictionary = comps.get("model", {})
-	var collider: Dictionary = comps.get("collider", {})
-	if model.is_empty() or collider.is_empty():
+	var item: Dictionary = _pack.item_for(content_id, Transform3D(Basis(Vector3.UP, yaw), at))
+	# 只有内容是刚体的东西才造得出来。mod 不能凭空造一个静态障碍 ——
+	# 那会在世界里留下一个没人能删掉、也不知道从哪来的碰撞体。
+	if item.is_empty() or not bool(item["dynamic"]):
 		return 0
-	var item := {
-		"id": content_id,
-		"mesh": String(model.get("mesh", "")),
-		"xform": Transform3D(Basis(Vector3.UP, yaw), at),
-		"color": _pack.palette_color(String(model.get("palette", "default"))),
-		"collider": collider,
-		"dynamic": true,
-	}
 	var body = SOLIDS.make_dynamic(item)
 	if body == null:
 		return 0

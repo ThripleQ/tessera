@@ -62,26 +62,23 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		_note_skip("房间 `%s` 的 spawner 指向不存在的内容 `%s`" % [room_id, arch_id])
 		return
 
-	var model: Dictionary = pack.entities[arch_id].get("components", {}).get("model", {})
-	if model.is_empty():
+	var probe: Dictionary = pack.item_for(arch_id, Transform3D())
+	if probe.is_empty():
 		_note_skip("原型 `%s` 没有 model 组件（抽象基类不能直接摆）" % arch_id)
 		return
 
-	var arch_comps: Dictionary = pack.entities[arch_id].get("components", {})
-	var collider: Dictionary = arch_comps.get("collider", {})
-	# 只有声明了 collider 且 dynamic 的东西才是刚体。引擎判断依据全在数据里，
-	# 不知道它叫"木箱"还是别的什么。
-	var is_dynamic := not collider.is_empty() and bool(collider.get("dynamic", false))
+	var mesh_id := String(probe["mesh"])
+	if MESH_LIB.build(mesh_id) == null:
+		_note_skip("网格 `%s` 引擎没实现几何，房间 `%s` 的内容被跳过" % [mesh_id, room_id])
+		return
+
+	# 只有声明了 collider 且 dynamic 的东西才是刚体。判断依据全在数据里，
+	# 引擎不知道它叫"木箱"还是别的什么（Pack.item_for 里算的）。
+	var is_dynamic: bool = probe["dynamic"]
 	var spawn_height := float(spawner.get("height", 0.0))
 	# 静态物体没有"下落"这回事，给它一个空中起点只会变成悬空的错误摆设。
 	if not is_dynamic:
 		spawn_height = 0.0
-
-	var mesh_id := String(model.get("mesh", ""))
-	if MESH_LIB.build(mesh_id) == null:
-		_note_skip("网格 `%s` 引擎没实现几何，房间 `%s` 的内容被跳过" % [mesh_id, room_id])
-		return
-	var color: Color = pack.palette_color(String(model.get("palette", "default")))
 
 	# 每个房间独立种子：以后加一个房间，不会改变已有房间的随机序列。
 	var rng := RandomNumberGenerator.new()
@@ -99,14 +96,7 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		var drop := spawn_height * rng.randf_range(0.55, 1.0) if is_dynamic else 0.0
 		var pos := center + Vector3(cos(ang) * dist, drop, sin(ang) * dist)
 		var basis := Basis(Vector3.UP, rng.randf() * TAU)
-		room["items"].append({
-			"id": arch_id,
-			"mesh": mesh_id,
-			"xform": Transform3D(basis, pos),
-			"color": color,
-			"collider": collider,
-			"dynamic": is_dynamic,
-		})
+		room["items"].append(pack.item_for(arch_id, Transform3D(basis, pos)))
 
 
 func _note_skip(msg: String) -> void:

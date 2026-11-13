@@ -160,6 +160,33 @@ func recompute_counts() -> void:
 		counts[k] = int(counts.get(k, 0)) + 1
 
 
+## 把一个内容 id 变成"世界能摆的东西"。
+##
+## 房间填充、mod 的 spawn、存档还原都需要这件事，所以只能有一份实现 ——
+## 三处各写一遍的话，它们会在原点、collider 默认值、is_dynamic 的判定上慢慢分叉，
+## 而分叉的表现是"存档读出来的箱子和原来那个不太一样"，是最难查的一类 bug。
+##
+## 返回空字典 = 这个 id 摆不出来（没有 model，或者内容里根本没有它）。
+## 这里**不检查网格是否实现** —— 那是渲染层的事，Pack 不认识渲染。
+func item_for(content_id: String, xform: Transform3D) -> Dictionary:
+	if not entities.has(content_id):
+		return {}
+	var comps: Dictionary = entities[content_id].get("components", {})
+	var model: Dictionary = comps.get("model", {})
+	if model.is_empty():
+		return {}
+	var collider: Dictionary = comps.get("collider", {})
+	return {
+		"id": content_id,
+		"mesh": String(model.get("mesh", "")),
+		"xform": xform,
+		"color": palette_color(String(model.get("palette", "default"))),
+		"collider": collider,
+		# 引擎永远按数据判断"会不会动"，不按名字。铁律 2。
+		"dynamic": not collider.is_empty() and bool(collider.get("dynamic", false)),
+	}
+
+
 func summary() -> String:
 	var lines: Array[String] = []
 	lines.append("内容包 v%d：%d 条" % [api_version, entities.size()])
