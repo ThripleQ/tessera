@@ -91,6 +91,13 @@
 - **房间自带的障碍和玩家摆的柱子长得一模一样**，区别只在归属：前者在 chunk 里，
   后者在 `world.props` 里。`world.remove_thing` 只认后两个列表 —— 这就是
   "房间拆不掉"的全部实现。别把这条守卫改成"按 collider 是不是 static 判断"。
+- **类型化数组的 `find` 会报错，但"刚好"返回 -1**。`bodies` 是 `Array[RigidBody3D]`，
+  拿 `StaticBody3D` 去 `find` 会打一条引擎 ERROR 再返回 -1 —— 恰好落到正确分支。
+  断言全绿、功能正确、日志每右键一次墙就脏一行。**先按类型分岔再 find**。
+  这一类"刚好对"的实现最难发现，见下一条。
+- **验收曾经只 grep 业务标记，于是引擎报错完全不可见**。现在 `no_engine_errors()`
+  把 `^ERROR` 一律算失败（第 5/6/7 步都过一遍）。摘钩验证过一次：把上面那个
+  `find` 的错误用法放回去，`MENU RESULT OK` 仍然打印，但验收红 —— 这就是它存在的理由。
 - **`pass` 是 GDScript 关键字**，不能当变量名（`var pass := ...` 会 Parse Error）。
 - **`run.sh` 的参数白名单**：`--trust=*` / `--selftest` / `--fresh` 要放进 `--` 之后。
   新加一个游戏参数必须同时改这里。

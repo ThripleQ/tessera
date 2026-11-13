@@ -10,6 +10,24 @@ export GODOT_SILENCE_ROOT_WARNING=1
 fail=0
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
+# 引擎自己的报错一律算失败。
+#
+# 这几步原来只 grep 业务标记（`RESULT OK` / `自检通过`），于是"功能对、但引擎在骂人"
+# 的那一类问题在验收里完全看不见：0 个失败断言 + 1 屏 ERROR。
+# 真实案例：`bodies.find(墙)` 拿 StaticBody3D 去 `Array[RigidBody3D]` 里找，
+# 引擎报错再返回 -1 —— 恰好落到正确分支，所以断言全绿，只有玩家每右键一次墙，
+# 日志就脏一行。这类"刚好对"的实现是最难被发现的，因为它永远不失败。
+#
+# 什么时候它会误伤：当你依赖某个引擎的 ERROR 来正常工作。那就是实现该修了。
+no_engine_errors() {   # $1=输出  $2=步骤名
+    if echo "$1" | grep -qE '^(ERROR|SCRIPT ERROR)'; then
+        echo "$1" | grep -E '^(ERROR|SCRIPT ERROR)' | head -10
+        echo "$2 出现引擎报错（见上）—— 功能可能仍然是对的，但这不是可以留着的东西"
+        return 1
+    fi
+    return 0
+}
+
 # build/ 必须在第一步之前就存在。原来它是由"编译内容"顺手创建的，
 # 而编译器自测排在编译之前 —— 于是本地（build/ 早就在）通过，CI（干净 clone）红，
 # 而且错误只是 `No such file or directory`，看起来像环境问题。
@@ -68,6 +86,7 @@ step "5/7 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
 # 否则脚本崩了也会"通过"。
 out=$(timeout 180 "$GODOT" --headless --path game --quit-after 600 -- --selftest --trust=all 2>&1)
 echo "$out" | grep -v '^Godot Engine'
+no_engine_errors "$out" "自检" || fail=1
 if ! echo "$out" | grep -q '自检通过'; then
     echo "自检未打印通过标记"
     fail=1
@@ -82,6 +101,7 @@ export TESSERA_SAVE_SLOT=probe.json
 out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/save_roundtrip.gd \
     -- --fresh --trust=all 2>&1)
 echo "$out" | grep -E '^(SAVE|RESULT)'
+no_engine_errors "$out" "存档往返" || fail=1
 if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物 OK'; then
     echo "存档往返未通过"
     fail=1
@@ -97,6 +117,7 @@ out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/spawn_me
 # SCRAPE 行也放出来：拆的四条路各错各的，失败时唯一有用的信息就在这几行里，
 # 而 RESULT 只告诉你"有一项 FAIL"——把它藏起来等于让下一个人从零开始复现。
 echo "$out" | grep -E '^(MENU|SCRAPE)'
+no_engine_errors "$out" "生成菜单" || fail=1
 if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     echo "生成菜单未通过"
     fail=1
@@ -107,4 +128,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\033[31m验收失败\033[0m\n'
     exit 1
 fi
-printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、存档能往返、菜单能生成\n'
+printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、存档能往返、菜单能生成、引擎无报错\n'

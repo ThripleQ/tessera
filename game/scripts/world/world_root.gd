@@ -173,12 +173,19 @@ func clear_spawned() -> int:
 ## 这个判断很重要：射线打到房间墙上的碰撞壳时，`remove_thing` 必须返回 false。
 ## 房间的障碍不在 `props` 里，正是因为那条分界 —— 它们是内容的形状，
 ## 玩家不该能一块一块拆掉房间。
+##
+## **先按类型分岔，再 find**：`bodies` 是 `Array[RigidBody3D]`，拿一个
+## StaticBody3D 去 `find` 是类型错误 —— 引擎会打一条 ERROR 再返回 -1。
+## 功能上刚好"对"（落到 props 分支），所以探针照样绿、grep 也看不见，
+## 只有真跑起来看 stderr 才知道玩家每右键一次墙，日志就脏一行。
 func remove_thing(node: Node) -> bool:
 	if node == null or not is_instance_valid(node):
 		return false
 
-	var i := bodies.find(node)
-	if i >= 0:
+	if node is RigidBody3D:
+		var i := bodies.find(node)
+		if i < 0:
+			return false
 		var id := String(node.get_meta("content_id", ""))
 		var h := int(node.get_meta("handle", 0))
 		var pos: Vector3 = node.global_position
