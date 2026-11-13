@@ -1,0 +1,17 @@
+api_version = 1
+kind = "archetype"
+name = "木箱"
+doc = "纯装饰 + 可交互。没有 ai 和 move，所以它永远不会进模拟层。"
+tags = ["prop"]
+
+[components.model]
+mesh = "prop_crate"
+palette = "wood"
+
+[components.collider]
+shape = "box"
+size = 0.8
+
+[components.interaction]
+verb = "open"
+prompt = "打开"

@@ -1,0 +1,9 @@
+api_version = 1
+kind = "item"
+name = "骨符"
+doc = "消耗品。堆叠上限 20，价值 5。"
+tags = ["charm"]
+
+[components.pickup]
+value = 5
+stack = 20

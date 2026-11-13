@@ -1,0 +1,27 @@
+api_version = 1
+kind = "archetype"
+id = "enemy/base_undead"
+name = "亡灵（基类）"
+doc = "所有亡灵的公共模板。它本身不会被摆进世界，只作为 extends 的起点。"
+tags = ["undead"]
+
+[components.model]
+mesh = "humanoid_lowpoly"
+palette = "bone"
+
+[components.health]
+max = 30
+regen = 0.0
+
+[components.move]
+speed = 1.2
+wander = 2.0
+
+[components.ai]
+brain = "patrol"
+aggro_radius = 8.0
+leash = 30.0
+
+[components.collider]
+shape = "capsule"
+size = 0.6

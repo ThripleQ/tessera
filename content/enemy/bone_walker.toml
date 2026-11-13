@@ -1,0 +1,19 @@
+api_version = 1
+kind = "archetype"
+extends = "enemy/base_undead"
+name = "骨行者"
+doc = "近战杂兵。只覆写父模板里的 4 个字段。"
+tags = ["melee"]
+
+[components.health]
+max = 45
+
+[components.move]
+speed = 1.8
+
+[components.ai]
+brain = "charger"
+
+[components.loot]
+table = "common"
+chance = 0.4

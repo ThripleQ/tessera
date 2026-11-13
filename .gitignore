@@ -1,0 +1,20 @@
+# 产物（全部可由 ./check.sh 重新生成，不进版本库）
+build/
+game/content.pack.json
+game/content.pack.bin
+game/.godot/
+game/export/
+
+# 引擎二进制（65MB，各自本地下载，见 README）
+tools-bin/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/

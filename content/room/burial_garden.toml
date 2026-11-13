@@ -1,0 +1,15 @@
+api_version = 1
+kind = "room"
+name = "葬园"
+doc = "有烘焙天光的户外小院。放 3 只墓影。"
+tags = ["garden", "outdoor"]
+
+[components.room]
+size_x = 48.0
+size_z = 40.0
+lit = true
+
+[components.spawner]
+archetype = "enemy/grave_shade"
+count = 3
+radius = 14.0

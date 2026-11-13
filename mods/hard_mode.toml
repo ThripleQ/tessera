@@ -1,0 +1,17 @@
+api_version = 1
+kind = "patch"
+target = "enemy/*"
+name = "困难模式"
+tags = ["hardmode"]
+doc = """
+不改一行代码、不重新编译，把所有敌人的血量乘 1.6、仇恨半径加 4 米。
+
+注意 patch 的语义：它作用在“已经解析完继承链的最终实体”上，
+因此不会沿着 extends 向下传播 —— 想影响整个族群就把 target 写成通配符。
+"""
+
+[components.health]
+max = { mul = 1.6 }
+
+[components.ai]
+aggro_radius = { add = 4.0 }

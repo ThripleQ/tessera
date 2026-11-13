@@ -1,0 +1,31 @@
+api_version = 1
+kind = "archetype"
+extends = "enemy/base_undead"
+name = "墓影"
+doc = "远程伏击型。带一个自发光，所以它是帧预算里唯一会推高光源数的东西。"
+tags = ["caster", "glow"]
+
+[components.model]
+mesh = "shade_lowpoly"
+palette = "violet"
+
+[components.health]
+max = 28
+regen = 0.5
+
+[components.move]
+speed = 1.1
+wander = 4.0
+
+[components.ai]
+brain = "ambusher"
+aggro_radius = 14.0
+
+[components.light]
+radius = 5.0
+intensity = 1.4
+flicker = true
+
+[components.loot]
+table = "rare"
+chance = 0.15

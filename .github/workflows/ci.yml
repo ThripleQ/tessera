@@ -1,0 +1,26 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 准备引擎
+        run: |
+          mkdir -p tools-bin
+          curl -sL -o /tmp/godot.zip \
+            https://github.com/godotengine/godot/releases/download/4.6-stable/Godot_v4.6-stable_linux.x86_64.zip
+          unzip -oq /tmp/godot.zip -d tools-bin
+          chmod +x tools-bin/Godot_v4.6-stable_linux.x86_64
+
+      - name: 验收
+        run: ./check.sh

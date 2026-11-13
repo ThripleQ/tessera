@@ -1,0 +1,14 @@
+api_version = 1
+kind = "item"
+name = "锈刃"
+doc = "最基础的武器。数值全在数据里，改平衡不用碰代码。"
+tags = ["weapon"]
+
+[components.wieldable]
+damage = 7
+reach = 1.6
+cooldown = 0.55
+
+[components.pickup]
+value = 12
+stack = 1

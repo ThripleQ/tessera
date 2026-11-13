@@ -1,0 +1,16 @@
+api_version = 1
+kind = "room"
+name = "墓厅"
+doc = "开局房间。放 6 只骨行者，90 秒重生一次。"
+tags = ["crypt"]
+
+[components.room]
+size_x = 32.0
+size_z = 32.0
+lit = false
+
+[components.spawner]
+archetype = "enemy/bone_walker"
+count = 6
+radius = 12.0
+respawn = 90.0
