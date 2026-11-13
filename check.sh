@@ -10,13 +10,18 @@ export GODOT_SILENCE_ROOT_WARNING=1
 fail=0
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
+# build/ 必须在第一步之前就存在。原来它是由"编译内容"顺手创建的，
+# 而编译器自测排在编译之前 —— 于是本地（build/ 早就在）通过，CI（干净 clone）红，
+# 而且错误只是 `No such file or directory`，看起来像环境问题。
+mkdir -p build
+
 step "1/7 编译基础内容（解析 → 继承 → 校验 → 产物）"
 # 先验证编译器本身没退化成"永远接受"，再编译真内容。
 # 一个从来没拒绝过东西的校验器，和不存在没有区别 —— 而且它还是绿的。
-if python3 tools/contentc.py --selftest > build/contentc_selftest.log 2>&1; then
-    echo "编译器自测：通过（5 条规则都能抓到违规）"
+if out=$(python3 tools/contentc.py --selftest 2>&1); then
+    echo "$out"
 else
-    cat build/contentc_selftest.log
+    echo "$out"
     fail=1
 fi
 python3 tools/contentc.py --content content \
