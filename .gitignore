@@ -8,8 +8,13 @@ game/export/
 # clone 下来先跑 ./run.sh（或 ./check.sh），它会把每个 mod 编一遍。
 mods/*/content.pack.json
 
+# 探针截图。它只在有显示的本机产出（CI 无头，拿不到视口纹理），
+# 提交会随时间过期的界面图只会让人误判"现在长这样"。
+game/*.png
+
 # 引擎二进制（65MB，各自本地下载，见 README）
 tools-bin/
+
 
 # 编辑器与系统
 .vscode/
