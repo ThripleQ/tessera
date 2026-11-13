@@ -12,13 +12,14 @@ extends Node3D
 const PACK_SCRIPT = preload("res://scripts/content/pack.gd")
 const PLAN_SCRIPT = preload("res://scripts/world/plan.gd")
 const WORLD_SCRIPT = preload("res://scripts/world/world_root.gd")
-const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const PLAYER_SCRIPT = preload("res://scripts/player/player.gd")
 const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
 const API_SCRIPT = preload("res://scripts/hooks/api.gd")
 const LOADER = preload("res://scripts/mods/loader.gd")
 const REGISTRY = preload("res://scripts/mods/registry.gd")
 const SAVE = preload("res://scripts/save/store.gd")
+const SPAWN_MENU = preload("res://scripts/ui/spawn_menu.gd")
+const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
 
@@ -80,7 +81,9 @@ func _ready() -> void:
 	print(bus.summary())
 
 	if selftest:
-		var ok: bool = _selftest()
+		# 自检住在自己的域里：它怀疑的是"拼起来的东西对不对"，
+		# 而不是"怎么拼"。混在装配代码里，最典型的退化是自检迁就实现。
+		var ok: bool = SELFTEST.run(self)
 		get_tree().quit(0 if ok else 1)
 		return
 
@@ -166,90 +169,6 @@ func _mod_ids(candidates: Array) -> Array[String]:
 	return out
 
 
-func _selftest() -> bool:
-	var ok := true
-
-	# 钩子：契约声明的 == 引擎真发的。
-	# 只声明不发是撒谎（mod 挂了钩子永远等不到），只发不声明是绕过契约。
-	# 这条检查的价值不在于今天，而在于以后有人加了钩子却忘了接线的那一刻。
-	var declared := PackedStringArray(pack.schema.get("hooks", {}).keys())
-	declared.sort()
-	var emitted := PackedStringArray(BUS_SCRIPT.EMITTED)
-	emitted.sort()
-	if declared != emitted:
-		printerr("自检失败：钩子声明与引擎发出不一致\n  契约：%s\n  引擎：%s"
-			% [", ".join(declared), ", ".join(emitted)])
-		ok = false
-
-	# mod 编译失败必须在 CI 就暴露。玩家装了个坏 mod 当然会炸，
-	# 但我们自己仓库里的 mod 挂了却一路绿灯，那才是灾难。
-	for e in mods.get("errors", []):
-		printerr("自检失败：mod 加载错误 —— %s" % e)
-		ok = false
-
-	# 带脚本的 mod 一个都没跑起来，说明验收没测到行为开放。
-	# 这种"绿得毫无意义"的通过比红的更危险，所以必须当成失败。
-	if mod_blocked > 0:
-		printerr("自检失败：%d 个带脚本的 mod 未被授权，脚本通道没被验证到"
-			% mod_blocked)
-		printerr("  验收里应该显式授权：./check.sh 会给 --trust。见 docs/decisions/0008")
-		ok = false
-
-	# 基础内容不许带脚本：基础内容永远被信任（它在仓库里、随引擎发布），
-	# 一旦它能带脚本，就存在一条绕过授权闸门的通道 —— 而且是最好用的那条。
-	if base_scripts > 0:
-		printerr("自检失败：基础内容里有 %d 条 kind=\"script\"。脚本必须来自 mod 目录" % base_scripts)
-		ok = false
-
-	# 边界校验：内容用到的每个组件，契约里必须声明过。
-	# 编译期已经查过一遍，这里再查是防"旧 pack 配新引擎"这类错配 ——
-	# 那种情况下编译期检查根本没跑过。
-	var declared_comps := {}
-	for c in pack.declared_components():
-		declared_comps[c] = true
-	for c in pack.used_components():
-		if not declared_comps.has(c):
-			printerr("自检失败：内容引用了契约里不存在的组件 `%s`" % c)
-			ok = false
-
-	# 契约里有这个网格，引擎就必须画得出来。缺一个都算失败 ——
-	# 否则那个东西会静默地从世界里消失，没有任何人会发现。
-	var declared_meshes: Dictionary = pack.schema.get("meshes", {})
-	var missing := MESH_LIB.missing(PackedStringArray(declared_meshes.keys()))
-	if not missing.is_empty():
-		printerr("自检失败：契约里有这些网格但引擎没实现几何：%s" % ", ".join(missing))
-		ok = false
-
-	# 三角形数必须与实测一致。改了几何却忘了改契约，预算就会在无人察觉的情况下失真，
-	# 而"预算失真"是这个项目最不能接受的一种错误 —— 它让人以为世界还装得下。
-	for mesh_id in declared_meshes:
-		var want := int(declared_meshes[mesh_id])
-		var got: int = MESH_LIB.triangles_of(String(mesh_id))
-		if want != got:
-			printerr("自检失败：网格 `%s` 契约写 %d 三角形，引擎实测 %d" % [mesh_id, want, got])
-			ok = false
-
-	if plan.instance_count() <= 0:
-		printerr("自检失败：世界是空的（房间填不出东西，检查 spawner 指向的原型）")
-		ok = false
-
-	# 每个房间都必须有地板，否则玩家走进去会直接掉进虚空。
-	for room_id in plan.rooms:
-		var fs: Vector2 = plan.rooms[room_id]["floor_size"]
-		if fs.x <= 0.0 or fs.y <= 0.0:
-			printerr("自检失败：房间 `%s` 没有地板尺寸，玩家会掉下去" % room_id)
-			ok = false
-
-	print("网格实现 %d / 契约 %d 种" % [MESH_LIB.implemented().size(), declared_meshes.size()])
-	print("物理：刚体 %d / 障碍 %d / 地板 %d 块"
-		% [plan.dynamic_count(), plan.solid_static_count(), plan.rooms.size()])
-	print("行为：mod %d 个 / 脚本 %d 个 / 挂载 %d 处 / 契约钩子 %d 个"
-		% [mod_units.size(), mods.get("files", 0), bus.handler_count(), declared.size()])
-	if ok:
-		print("自检通过")
-	return ok
-
-
 ## 场景组装：环境 + 主光 + 世界 + 玩家。全部是引擎的"怎么跑"。
 func _setup_scene() -> void:
 	get_tree().auto_accept_quit = false
@@ -274,6 +193,14 @@ func _setup_scene() -> void:
 	add_child(_player)
 	_player.position = _start_position(_world)
 	_world.attach_camera(_player.camera())
+
+	# 菜单要在玩家之后建：它要接管玩家输入。
+	var menu = SPAWN_MENU.new()
+	menu.name = "spawn_menu"
+	menu.pack = pack
+	menu.api = api
+	menu.player = _player
+	add_child(menu)
 
 	# 读档必须在世界和玩家都已就位之后：它要替换整个世界里的刚体，
 	# 并把玩家挪回上次站的地方。
@@ -305,7 +232,8 @@ func _resume() -> void:
 		printerr("读档失败：%s" % err)
 		return
 	var missing: Array = r["missing"]
-	var line := "读档：恢复 %d 个物体（清掉 %d 个）" % [r["spawned"], r["cleared"]]
+	var line := "读档：恢复 %d 个刚体 + %d 个静态物（清掉 %d 个）" \
+		% [r["spawned"], r["placed"], r["cleared"]]
 	if not missing.is_empty():
 		# 内容不在了（mod 被卸载、原型改名）。玩家有权知道自己的东西为什么少了。
 		line += "  —— %d 种内容找不到，已跳过：%s" % [missing.size(), ", ".join(missing)]
@@ -319,7 +247,8 @@ func _save_now(quiet: bool) -> void:
 	if not SAVE.write(save):
 		return
 	if not quiet:
-		print("已保存：%d 个物体 -> %s" % [(save["bodies"] as Array).size(), SAVE.path()])
+		print("已保存：%d 个刚体 + %d 个静态物 -> %s"
+			% [(save["bodies"] as Array).size(), (save["props"] as Array).size(), SAVE.path()])
 
 
 ## F5 存、F9 读。手动存档先于自动存档存在，理由很实在：

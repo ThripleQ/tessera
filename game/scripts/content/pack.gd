@@ -40,18 +40,51 @@ func load_from(path: String) -> bool:
 	return true
 
 
-## 能在世界里摆出来的原型：必须带 model 组件。
-## 基类（只作为 extends 起点）通常也有 model，但它们的 tags 里带 "abstract"。
+## 能在世界里摆出来的原型：必须带 model 组件，且不是抽象基类。
+##
+## 三处（房间填充 / 生成菜单 / mod 造物）都靠这一份清单判断"有什么能摆"，
+## 所以过滤规则只能写在这里。之前它只查了 model，注释却写着"基类靠 tags 里的
+## abstract 排除"—— 而内容里根本没有人往 tags 里写这个，于是生成菜单的第一项
+## 是 `enemy/base_undead`，点下去只会失败。注释和代码不一致的时候，
+## 引擎信的是代码。
 func spawnables() -> Array[String]:
 	var out: Array[String] = []
 	for id in entities:
-		var e: Dictionary = entities[id]
-		var comps: Dictionary = e.get("components", {})
+		if is_abstract(id):
+			continue
+		var comps: Dictionary = entities[id].get("components", {})
 		if not comps.has("model"):
 			continue
 		out.append(id)
 	out.sort()
 	return out
+
+
+## 抽象 = 只能被 extends，不能单独存在。字段名由契约保证（拼错会在编译期报错），
+## 所以这里可以放心地按字段读，不需要再猜 tags。
+func is_abstract(content_id: String) -> bool:
+	var e = entities.get(content_id, null)
+	if e == null:
+		return false
+	return bool(e.get("abstract", false))
+
+
+## 这条内容摆出来会不会动。依据只有 collider.dynamic，不看 id、不看名字（铁律 2）。
+func places_as_rigid(content_id: String) -> bool:
+	var item := item_for(content_id, Transform3D())
+	if item.is_empty():
+		return false
+	return bool(item["dynamic"])
+
+
+## 给人看的名。取内容的 `name`，没有就退回 id ——
+## 菜单里出现一串 `prop/crate` 说明内容缺 name，但界面不该因此空着。
+func label_of(content_id: String) -> String:
+	var e = entities.get(content_id, null)
+	if e == null:
+		return content_id
+	var n := String(e.get("name", ""))
+	return n if not n.is_empty() else content_id
 
 
 ## 世界里实际会用到的网格种类。合批是按网格分组的，

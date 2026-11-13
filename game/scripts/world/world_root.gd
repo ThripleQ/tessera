@@ -19,6 +19,12 @@ const IMPACT_MIN_SPEED := 2.0
 var chunks: Dictionary = {}
 ## 有独立物理身份的东西。mod 通过 handle 认出它们，但它们本身不知道 mod 存在。
 var bodies: Array[RigidBody3D] = []
+## 玩家和 mod 摆出来的静态物体（钉住、不参与模拟）。
+##
+## 它们**不在** `bodies` 里，因为静态物体没有物理身份、不该被抓取或推动。
+## 但它们必须被单独记住：房间里的静态障碍是"内容的形状"，由房间决定；
+## 这些是"玩家的动作"，要进存档、要能删掉。
+var props: Array[Node3D] = []
 
 ## 由 main 注入。为空时世界照常跑 —— 没有 mod 的平台也必须能玩。
 var bus = null
@@ -33,6 +39,7 @@ func realize(plan) -> void:
 	_add_ground(plan)
 	_rooms_with_rigid.clear()
 	bodies.clear()
+	props.clear()
 
 	for room_id in plan.rooms:
 		var room: Dictionary = plan.rooms[room_id]
@@ -116,15 +123,42 @@ func add_dynamic(item: Dictionary) -> RigidBody3D:
 	return rb
 
 
-## 清空所有动态物体。载入存档时必须先清再建 ——
-## 否则旧的那些会和新的一起留在世界里，而且每读一次档数量就涨一轮。
-func clear_dynamic() -> int:
+## 造一个钉住的东西：碰撞壳 + 自己的一份视觉。
+##
+## 房间里那些静态障碍的视觉在 MultiMesh 合批里，所以它们不需要这个；
+## 玩家和 mod 摆出来的东西不属于任何块，必须自带网格 ——
+## 否则会得到一个看不见但会挡路的幽灵。
+func add_static(item: Dictionary) -> Node3D:
+	var mesh := MESH_LIB.build(String(item["mesh"]))
+	if mesh == null:
+		return null
+	var body: StaticBody3D = SOLIDS.make_static(item)
+	body.set_meta("content_id", String(item.get("id", "")))
+	var visual := MeshInstance3D.new()
+	visual.name = "visual"
+	visual.mesh = mesh
+	visual.material_override = MESH_LIB.toon_material_for(item["color"])
+	body.add_child(visual)
+	add_child(body)
+	props.append(body)
+	return body
+
+
+## 清空所有"被造出来的东西"：动态刚体 + 玩家摆的静态物体。
+## 载入存档时必须先清再建 —— 否则旧的会和新的一起留在世界里，
+## 而且每读一次档数量就涨一轮。
+func clear_spawned() -> int:
 	var n := 0
 	for rb in bodies:
 		if is_instance_valid(rb):
 			rb.queue_free()
 			n += 1
 	bodies.clear()
+	for p in props:
+		if is_instance_valid(p):
+			p.queue_free()
+			n += 1
+	props.clear()
 	_speeds.clear()
 	return n
 

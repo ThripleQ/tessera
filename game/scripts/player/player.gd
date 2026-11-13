@@ -55,6 +55,23 @@ var _grabber
 var hooks = null
 var api = null
 
+## 菜单类 UI 打开时置真。玩家的输入必须能被整体接管 ——
+## 否则鼠标在选菜单，视角在后面跟着转，选完发现自己转了半圈。
+var input_blocked := false
+
+
+## 接管 / 交还输入。交出控制权时把鼠标放出来，收回时重新捕获 ——
+## 这两件事必须一起做，只做一半会留下"能动但点了没反应"的状态。
+func set_input_blocked(blocked: bool) -> void:
+	input_blocked = blocked
+	_buffer = 0.0
+	if blocked:
+		_captured = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		_captured = true
+
 
 func _ready() -> void:
 	var shape := CapsuleShape3D.new()
@@ -117,6 +134,8 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if input_blocked:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if _captured:
@@ -158,7 +177,7 @@ func _physics_process(delta: float) -> void:
 		_buffer = 0.0
 		_coyote = 0.0
 
-	var wish := _wish_direction()
+	var wish := Vector3.ZERO if input_blocked else _wish_direction()
 	var speed := SPRINT_SPEED if Input.is_physical_key_pressed(KEY_SHIFT) else WALK_SPEED
 	var target := wish * speed
 	var accel := GROUND_ACCEL if is_on_floor() else AIR_ACCEL

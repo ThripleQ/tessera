@@ -13,15 +13,16 @@ extends RefCounted
 ## 所以 mod 手里只有整数 handle。它不能遍历、不能反查、不能拼路径，
 ## 只能通过这里列出的方法请求一件事发生。
 
-const SOLIDS = preload("res://scripts/physics/solids.gd")
-
-## mod 造物的上限。开放不等于无限：一个没人拦的 spawn 循环能把帧率瞬间打到零，
+## 世界里"被造出来"的东西的上限，动态静态一起算。
+## 开放不等于无限：一个没人拦的 spawn 循环能把帧率瞬间打到零，
 ## 而"预算由系统强制"是这个项目从第一天起的规矩（ADR 0005 末尾）。
 const MAX_SPAWNED := 96
 const MAX_QUERY := 64
 
 var _pack = null
-var _parent: Node3D = null
+## 世界节点。造东西要经过它 —— "造一个物体会发生什么"（登记 handle、监视碰撞、
+## 发 entity.spawn）只有一份实现，在这里自己 add_child 会悄悄绕过那一份。
+var _world: Node3D = null
 var _bodies: Dictionary = {}     # handle -> RigidBody3D
 var _ids: Dictionary = {}        # handle -> 内容 id（引擎只转手，不解读）
 var _base_color: Dictionary = {} # handle -> 原始颜色，给 reset_tint 用
@@ -37,7 +38,7 @@ func _init(pack) -> void:
 ## 世界节点是 mod 造物的父节点。传进来而不是让 mod 自己找 ——
 ## mod 永远不该知道节点树长什么样。
 func attach_world(world: Node3D) -> void:
-	_parent = world
+	_world = world
 
 
 ## 引擎侧登记一个刚体，返回它的 handle。
@@ -158,27 +159,56 @@ func reset_tint(handle: int) -> bool:
 	return tint(handle, c)
 
 
-## 按内容 id 造一个刚体。id 必须是内容里声明过 dynamic 的原型，
-## 否则拒绝 —— 引擎不替内容决定"什么能造"。
-func spawn(content_id: String, at: Vector3, yaw: float = 0.0) -> int:
-	if _pack == null or _parent == null:
-		return 0
+## 按内容 id 造一个东西。造出来是刚体还是钉住的静态物，**由内容数据决定**，
+## 调用方不需要知道，也不该知道（铁律 2）。
+##
+## 返回 `{ok, handle, dynamic, reason}`：
+##   ok=false  时 `reason` 是给人看的一句话，会被 UI 原样显示
+##   handle    只有刚体才有。静态物没有物理身份，所以是 0 —— 但 ok 是 true
+##
+## 为什么不再用"返回 0 就是失败"：静态物本来就没有 handle，于是在一个 int 里
+## "放下了"和"没放下"没法区分。而生成菜单必须能说出是哪一种 ——
+## 一个只会说"失败"的菜单，会让人以为整个功能坏着。
+func spawn(content_id: String, at: Vector3, yaw: float = 0.0) -> Dictionary:
+	if _pack == null or _world == null:
+		return _refuse("引擎还没装配好世界")
+	# 预算由系统强制（ADR 0005）。开放不等于无限：没人拦的 spawn 循环
+	# 能把帧率瞬间打到零，而"玩家的东西能无限放、mod 的不能"更糟 ——
+	# 那预算就成了只约束好人的规矩。
 	if spawned >= MAX_SPAWNED:
 		refused += 1
-		return 0
+		return _refuse("预算用尽（上限 %d），先拿掉一些" % MAX_SPAWNED)
 	if not _pack.entities.has(content_id):
-		return 0
+		return _refuse("没有这条内容：%s" % content_id)
+	# 抽象基类不能单独存在。它的数据往往是不完整的，摆出来是个半成品，
+	# 而且不会报错 —— 所以在这里挡住，理由说清楚。
+	if _pack.is_abstract(content_id):
+		return _refuse("`%s` 是抽象基类，只能被 extends" % content_id)
+
 	var item: Dictionary = _pack.item_for(content_id, Transform3D(Basis(Vector3.UP, yaw), at))
-	# 只有内容是刚体的东西才造得出来。mod 不能凭空造一个静态障碍 ——
-	# 那会在世界里留下一个没人能删掉、也不知道从哪来的碰撞体。
-	if item.is_empty() or not bool(item["dynamic"]):
-		return 0
-	var body = SOLIDS.make_dynamic(item)
+	if item.is_empty():
+		return _refuse("`%s` 没有外观，摆不出来" % content_id)
+
+	# 静态物：有碰撞、挡路、推不动，不进 bodies、没有 handle。
+	# 它照样是"玩家的动作"，会被单独记住（world.props / 存档）。
+	if not bool(item["dynamic"]):
+		if _world.add_static(item) == null:
+			return _refuse("网格 `%s` 引擎没实现几何" % String(item["mesh"]))
+		spawned += 1
+		return {"ok": true, "handle": 0, "dynamic": false, "reason": ""}
+
+	var body = _world.add_dynamic(item)
 	if body == null:
-		return 0
-	_parent.add_child(body)
+		return _refuse("刚体造不出来：`%s`" % content_id)
 	spawned += 1
-	return register(body, content_id)
+	# handle 由 world 在登记时算好挂在刚体上。这里不自己发号 ——
+	# 一个物体两个号，mod 手里的 handle 就有一半是假的。
+	return {"ok": true, "handle": int(body.get_meta("handle", 0)),
+		"dynamic": true, "reason": ""}
+
+
+func _refuse(reason: String) -> Dictionary:
+	return {"ok": false, "handle": 0, "dynamic": false, "reason": reason}
 
 
 func _read_color(body: RigidBody3D) -> Color:
