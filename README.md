@@ -12,8 +12,9 @@
 
 题材故意不定。框架先成立，内容后边长。
 
-> 状态：P1（手感）基本完成。有可操控角色、重力、碰撞、抓取与投掷，卡通渲染已接上，
-> 行为 mod（事件钩子）已跑通。详细进度见 [`docs/status.md`](docs/status.md)。
+> 状态：能玩、能装 mod、关掉再开东西还在。
+> 有可操控角色、重力、碰撞、抓取与投掷、卡通渲染、事件钩子、存档。
+> 详细进度见 [`docs/status.md`](docs/status.md)。
 
 **这个仓库的纪律是可执行的**：`./check.sh` 会检查目录命名、文件长度、域大小，
 以及最重要的一条——引擎层有没有硬编码具体内容的 id。写在文档里的架构，agent 会忘；
@@ -36,10 +37,11 @@
 
 | 目录 | 内容 | 状态 |
 |---|---|---|
-| `content/` `mods/` | TOML 内容：原型、道具、房间、覆写层、行为 mod | 可用 |
+| `content/` | 官方 TOML 内容：原型、道具、房间 | 可用 |
+| `mods/` | 可独立投放的 mod，一个目录一个 | 可用 |
 | `contract/` | 扩展点契约：组件、字段、枚举、事件钩子 | 可用 |
-| `tools/` | 内容编译器、热重载、架构纪律检查 | 可用 |
-| `game/` | Godot 4.6 工程 | 能玩：角色 + 物理 + 抓取 + 卡通渲染 |
+| `tools/` | 内容编译器、架构纪律检查 | 可用 |
+| `game/` | Godot 4.6 工程 | 能玩：角色 + 物理 + 抓取 + 卡通渲染 + 存档 |
 | `legacy/` | 早期的自研 C++ 渲染器与 Python 参考实现 | 归档，不参与构建 |
 
 `legacy/cpp-renderer` 是一个真实跑通过的 OpenGL 渲染器（3 万条内容 / 3 次 draw call /
@@ -68,11 +70,10 @@ cd ..
 | 操作 | 键 |
 |---|---|
 | 转视角 | 鼠标（左键捕获） |
-| 走 | `WASD` |
-| 跳 | `空格` |
-| 冲刺 | `Shift` |
+| 走 / 跳 / 冲刺 | `WASD` / `空格` / `Shift` |
 | **抓起 / 扔出** | **左键按住 / 松开** |
 | **轻轻放下** | **`R`** |
+| **存档 / 读档** | **`F5` / `F9`** |
 | 释放鼠标 | `Esc` |
 
 你会站在一个堆着木箱的院子里：14 个箱子是**真的刚体**，会掉、会滚、能被推、能被抓起来扔。
@@ -84,13 +85,20 @@ cd ..
 画面是卡通渲染：两级色阶 + 边缘光 + 反向外扩描边。原神那种脸做不到——
 那需要贴图与 blend shape，属于资产管线。现在能做到的是"色块卡通风"。
 
+**关窗口会存档。** 下次 `./run.sh` 时箱子还在你推到的位置。
+想从干净的世界开始：`./run.sh --fresh`。
+
 ## 验收
 
 ```bash
 ./check.sh
 ```
 
-四步：编译内容 → 架构纪律检查 → 同步到 Godot → 无头自检。失败返回非零。CI 跑的是同一个脚本。
+六步：编译官方内容 → 逐个编译 mod → 架构纪律检查 → 同步到 Godot →
+无头自检 → 存档往返测试。失败返回非零。CI 跑的是同一个脚本。
+
+第 6 步真的会推一个箱子、存、再推走、读档，然后要求它回到存档位置（误差 < 0.15 米）。
+这类代码的错法是"看起来存了，读回来差一点"——只有对比数字能发现。
 
 ## 加一件东西
 
@@ -112,20 +120,37 @@ brain = "ambusher"
 
 然后 `./check.sh`。**不用改任何代码，不用重新编译引擎。**
 
-## 写一个行为 mod
+## 写一个 mod
 
-两步。先声明它要挂哪些事件（这一步同时是**权限清单**）：
+一个 mod 就是一个目录。`mods/hello_glove/`：
+
+```
+mod.toml                 元数据
+content/*.toml           内容（可省略，纯脚本 mod 也行）
+scripts/*.gd             脚本（可选）
+```
+
+`mod.toml`：
 
 ```toml
-# mods/my_glove.toml
+[mod]
+id = "hello_glove"
+name = "磁力手套"
+version = "1.0.0"
+api_version = 1
+level = "script"          # data = 只有内容，script = 带代码
+```
+
+`content/behavior.toml` —— 声明它要挂哪些事件（这一步同时是**权限清单**）：
+
+```toml
 api_version = 1
 kind = "script"
-name = "磁力手套"
-source = "mods/scripts/my_glove.gd"
+source = "scripts/hello_glove.gd"     # 相对本 mod 目录
 events = ["grab.request", "grab.release"]
 ```
 
-再写脚本，只有一个入口：
+`scripts/hello_glove.gd` —— 只有一个入口：
 
 ```gdscript
 extends RefCounted
@@ -138,12 +163,32 @@ func handle(event: String, ctx: Dictionary, api) -> Dictionary:
 	return {}
 ```
 
-`./check.sh` 会编译它、校验 `events` 里的钩子都在契约里注册过，
-并在无头自检里真的加载一次。**写错了不会等到玩游戏才发现。**
+编译并启动：
 
-`api` 只提供动词：`spawn` / `impulse` / `tint` / `reset_tint` / `pos` / `speed` / `nearest`。
-拿不到节点、拿不到 `Transform3D`——这是故意的，理由见
-[ADR 0007](docs/decisions/0007-hooks.md)：暴露意图，不暴露结构。
+```bash
+python3 tools/contentc.py --mod mods/hello_glove --base content
+./run.sh --trust=hello_glove
+```
+
+`--trust` 只需给一次，之后记录在 `user://mods.json`。
+
+### 为什么需要 `--trust`
+
+**Godot 没有 GDScript 沙箱**：mod 脚本里 `OS.execute` 是可执行的（实测）。所以
+mod 只有两级——`data`（只有内容，默认放行）和 `script`（带代码，**默认拒绝**）。
+级别由"有没有可执行代码"判定，不由 `mod.toml` 里写的那一栏判定：
+把带脚本的 mod 标成 `data` 会被按 `script` 处理并挡下来。
+
+理由和边界见 [ADR 0003](docs/decisions/0003-open-channels.md) 与
+[ADR 0008](docs/decisions/0008-mods-and-saves.md)。
+
+### `api` 只提供动词
+
+`spawn` / `impulse` / `tint` / `reset_tint` / `pos` / `speed` / `nearest`。
+
+拿不到节点、拿不到 `Transform3D`——这是故意的（[ADR 0007](docs/decisions/0007-hooks.md)）：
+暴露意图，不暴露结构。一旦 mod 能 `get_node("../../chunk_0/MultiMesh")`，
+引擎内部结构当天就被生态钉死，之后你再也不敢重构。
 
 钩子清单在 `contract/registry.py`，当前 6 个：`world.ready`、`entity.spawn`、
 `grab.request`（可否决）、`grab.release`、`impact`、`tick`。
