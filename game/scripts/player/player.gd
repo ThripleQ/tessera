@@ -11,6 +11,7 @@ extends CharacterBody3D
 ## 这三个是"看起来粗糙但手感好"的典型例子：它们不增加任何视觉效果。
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+const GRAB = preload("res://scripts/player/grab.gd")
 
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 8.2
@@ -47,6 +48,12 @@ var _captured := false
 var _arm: SpringArm3D
 var _camera: Camera3D
 var _visual: Node3D
+var _grabber
+
+## 由 main 在 add_child 之前注入。玩家不自己去找总线 ——
+## 依赖由装配层给，组件之间不互相伸手（structure.md 四）。
+var hooks = null
+var api = null
 
 
 func _ready() -> void:
@@ -101,15 +108,26 @@ func _ready() -> void:
 	_camera.current = true
 	_arm.add_child(_camera)
 
+	_grabber = GRAB.new()
+	_grabber.setup(self, _camera, hooks, api)
+
 	rotation.y = _yaw
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_captured = true
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		_captured = true
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if _captured:
+				# 按住左键抓住，松手扔出去。这是沙盒里最自然的一对动作。
+				_grabber.press()
+			else:
+				# 没捕获鼠标时，左键的职责是先把鼠标要回来。
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+				_captured = true
+		elif _captured:
+			_grabber.release(true)
 	elif event is InputEventKey and event.physical_keycode == KEY_ESCAPE and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_captured = false
@@ -119,6 +137,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.physical_keycode == KEY_SPACE and event.pressed:
 		# 不直接起跳，只记一次"意图"。由物理帧判断当时到底能不能跳。
 		_buffer = JUMP_BUFFER
+	elif event is InputEventKey and event.physical_keycode == KEY_R and event.pressed:
+		# 轻轻放下，不给冲量。想摆东西时必须有这个 —— 否则每次都是扔。
+		_grabber.release(false)
 
 
 func _physics_process(delta: float) -> void:
@@ -155,6 +176,9 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_push_bodies(delta)
+	# 抓取在 move_and_slide 之后跑：手上的东西永远以"玩家已经落到哪儿"为准，
+	# 而不是以玩家上一帧的位置为准。
+	_grabber.update(delta)
 
 
 ## 推开挡路的刚体。
@@ -196,3 +220,8 @@ func _wish_direction() -> Vector3:
 
 func camera() -> Camera3D:
 	return _camera
+
+
+## 抓取器。给探针和调试用 —— 玩法本身不通过这个访问，输入直接喂给它。
+func grabber():
+	return _grabber

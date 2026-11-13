@@ -24,7 +24,12 @@ python3 tools/contentc.py --content content --content mods \
     --out build/content.pack.json --bin build/content.pack.bin || exit 1
 cp build/content.pack.json game/content.pack.json || exit 1
 
+# 行为 mod 的源码在仓库根下（mods/scripts/*.gd），引擎要在运行时从磁盘读它。
+# 显式告诉它根在哪，比让它在导出包里猜 res:// 的上一级要可靠得多。
+export TESSERA_ROOT="$(pwd)"
+
 echo
-echo "启动 —— 左键捕获鼠标转视角，WASD 平移，空格/Ctrl 升降，Shift 加速，Esc 释放鼠标"
+echo "启动 —— 鼠标转视角，WASD 走，空格跳，Shift 冲刺"
+echo "       左键按住抓起东西，松开扔出去；R 轻轻放下；Esc 释放鼠标"
 echo
 exec "$GODOT" --path game "$@"
