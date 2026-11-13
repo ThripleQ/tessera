@@ -4,6 +4,9 @@ game/content.pack.json
 game/content.pack.bin
 game/.godot/
 game/export/
+# mod 的产物同理：它是 content/ 的派生物，提交上来只会在每次编译后产生 diff 噪音。
+# clone 下来先跑 ./run.sh（或 ./check.sh），它会把每个 mod 编一遍。
+mods/*/content.pack.json
 
 # 引擎二进制（65MB，各自本地下载，见 README）
 tools-bin/

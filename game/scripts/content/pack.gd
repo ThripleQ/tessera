@@ -117,6 +117,49 @@ func used_components() -> PackedStringArray:
 	return out
 
 
+## 合并前用同一份 schema 校验 mod 的内容。
+##
+## 编译期已经校验过一遍，但那是**作者的**编译器跑的，而 mod 产物是外部文件、
+## 可以被手改。第三方产物不享有"编译期校验过"这个前提，所以这里必须再查一遍。
+## 契约是唯一的信任根，而它在引擎这一侧。
+func validate_entities(incoming: Dictionary) -> Array[String]:
+	var problems: Array[String] = []
+	var comps: Dictionary = schema.get("components", {})
+	for cid in incoming:
+		var body: Dictionary = incoming[cid]
+		if typeof(body) != TYPE_DICTIONARY:
+			problems.append("`%s` 不是字典" % cid)
+			continue
+		var used: Dictionary = body.get("components", {})
+		for c in used:
+			if not comps.has(c):
+				problems.append("`%s` 用了契约里没有的组件 `%s`" % [cid, c])
+	return problems
+
+
+## 把一个 mod 的内容并进来。冲突按"后到者覆盖"处理，被覆盖的 id 返回给调用方 ——
+## 两个 mod 改同一个原型时，玩家需要知道谁赢了，而不是看到一个混合结果。
+func merge_entities(incoming: Dictionary) -> Dictionary:
+	var overwritten: Array[String] = []
+	for cid in incoming:
+		if entities.has(cid):
+			overwritten.append(String(cid))
+		entities[cid] = incoming[cid]
+	recompute_counts()
+	return {"merged": incoming.size(), "overwritten": overwritten}
+
+
+## counts 必须整体重算，不能累加：mod 的产物里可能包含被覆写的实体，
+## 累加会把同一个 id 数两次，而 counts 是所有预算判断的分子。
+func recompute_counts() -> void:
+	counts = {}
+	for cid in entities:
+		var k := String(entities[cid].get("kind", ""))
+		if k.is_empty():
+			continue
+		counts[k] = int(counts.get(k, 0)) + 1
+
+
 func summary() -> String:
 	var lines: Array[String] = []
 	lines.append("内容包 v%d：%d 条" % [api_version, entities.size()])

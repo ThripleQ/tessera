@@ -17,6 +17,7 @@ const PLAYER_SCRIPT = preload("res://scripts/player/player.gd")
 const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
 const API_SCRIPT = preload("res://scripts/hooks/api.gd")
 const LOADER = preload("res://scripts/mods/loader.gd")
+const REGISTRY = preload("res://scripts/mods/registry.gd")
 
 const PACK_PATH := "res://content.pack.json"
 
@@ -29,6 +30,14 @@ var plan
 var bus
 var api
 var mods: Dictionary = {}
+## 已合并进来的 mod 单元，交给 loader 找脚本。
+var mod_units: Array[Dictionary] = []
+## 基础内容里带 kind="script" 的实体数。必须为 0：基础内容永远被信任，
+## 它一旦能带脚本，就等于有一条通道绕过了 mod 的授权闸门。
+var base_scripts := 0
+## 被授权闸门挡下的 mod 数。自检里必须为 0 —— 否则"行为开放"这条通道
+## 在这一轮里根本没被验证到，而验收照样是绿的。
+var mod_blocked := 0
 
 var _tick_acc := 0.0
 var _frames := 0
@@ -43,6 +52,10 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	print(pack.summary())
+	base_scripts = pack.ids_of_kind("script").size()
+
+	# mod 必须合并进 pack 之后再排世界，否则新内容根本不会出现在世界里。
+	_mount_mods(args)
 
 	plan = PLAN_SCRIPT.new()
 	plan.build(pack)
@@ -54,9 +67,9 @@ func _ready() -> void:
 	bus.api = api
 	print(bus.summary())
 
-	# 加载 mod 必须在建世界之前。entity.spawn 从第一个刚体就开始发，
+	# 加载脚本必须在建世界之前。entity.spawn 从第一个刚体就开始发，
 	# 晚一步加载就会漏掉整局的第一次生成，而且没有任何提示。
-	mods = LOADER.load_all(pack, LOADER.content_root(), bus)
+	mods = LOADER.load_all(mod_units, bus)
 	for line in mods["loaded"]:
 		print("mod 载入：%s" % line)
 	for e in mods["errors"]:
@@ -69,6 +82,85 @@ func _ready() -> void:
 		return
 
 	_setup_scene()
+
+
+## 发现 → 授权 → 合并。三步都"先看清楚，再动手"。
+##
+## 合并放在这里而不是 registry 里，是因为它要动 pack 对象 ——
+## registry 只回答"谁能进来"，不该拥有修改世界的权力。
+func _mount_mods(args: PackedStringArray) -> void:
+	var found := REGISTRY.discover(LOADER.search_paths())
+	_apply_trust(args, found["candidates"])
+
+	var resolved := REGISTRY.resolve(found, REGISTRY.load_settings())
+	for e in resolved["errors"]:
+		printerr("mod 扫描失败：%s" % e)
+	for w in resolved["warnings"]:
+		print("mod 提示：%s" % w)
+
+	for cand in resolved["blocked"]:
+		printerr("mod `%s` 未授权：它带脚本，而 Godot 没有 GDScript 沙箱（ADR 0003）。"
+			% cand["id"])
+		printerr("  信任它就跑一次： ./run.sh --trust=%s" % cand["id"])
+
+	var units: Array[Dictionary] = []
+	for cand in resolved["enabled"]:
+		var problems: Array[String] = pack.validate_entities(cand["entities"])
+		if not problems.is_empty():
+			for p in problems:
+				printerr("mod `%s` 被拒绝：%s" % [cand["id"], p])
+			continue
+		var merged: Dictionary = pack.merge_entities(cand["entities"])
+		var overwritten: Array = merged["overwritten"]
+		var note := "%s[%s] %d 条" % [cand["id"], cand["level"], merged["merged"]]
+		if not overwritten.is_empty():
+			note += "，覆写 %d 条（%s）" % [overwritten.size(), ", ".join(overwritten)]
+		print("mod 合并：%s" % note)
+		units.append(cand)
+
+	mod_units = units
+	mod_blocked = resolved["blocked"].size()
+	print(REGISTRY.describe(resolved))
+
+
+## 显式授权。没有 UI 之前，命令行就是那道开关 —— 而且它比 UI 更诚实：
+## 玩家必须自己敲出这个 mod 的 id，不能靠一路点"下一步"过去。
+func _apply_trust(args: PackedStringArray, candidates: Array) -> void:
+	var ids: Array[String] = []
+	for a in args:
+		var arg := String(a)
+		if not arg.begins_with("--trust="):
+			continue
+		var id := arg.trim_prefix("--trust=")
+		if id == "all":
+			# 只在明说的情况下才全信任，而且照样逐个记进名单 ——
+			# 下次不给这个参数时，授权依然有效，因为它们是具体的 id。
+			for c in candidates:
+				if c["level"] == "script":
+					ids.append(String(c["id"]))
+			continue
+		var hit := false
+		for c in candidates:
+			if String(c["id"]) == id:
+				hit = true
+		if not hit:
+			printerr("--trust=%s：没有这个 mod（现有：%s）"
+				% [id, ", ".join(_mod_ids(candidates))])
+			continue
+		ids.append(id)
+
+	if ids.is_empty():
+		return
+	if REGISTRY.trust(ids):
+		print("已授权：%s（记在 %s，下次不用再给这个参数）"
+			% [", ".join(ids), REGISTRY.SETTINGS_PATH])
+
+
+func _mod_ids(candidates: Array) -> Array[String]:
+	var out: Array[String] = []
+	for c in candidates:
+		out.append(String(c["id"]))
+	return out
 
 
 func _selftest() -> bool:
@@ -90,6 +182,20 @@ func _selftest() -> bool:
 	# 但我们自己仓库里的 mod 挂了却一路绿灯，那才是灾难。
 	for e in mods.get("errors", []):
 		printerr("自检失败：mod 加载错误 —— %s" % e)
+		ok = false
+
+	# 带脚本的 mod 一个都没跑起来，说明验收没测到行为开放。
+	# 这种"绿得毫无意义"的通过比红的更危险，所以必须当成失败。
+	if mod_blocked > 0:
+		printerr("自检失败：%d 个带脚本的 mod 未被授权，脚本通道没被验证到"
+			% mod_blocked)
+		printerr("  验收里应该显式授权：./check.sh 会给 --trust。见 docs/decisions/0008")
+		ok = false
+
+	# 基础内容不许带脚本：基础内容永远被信任（它在仓库里、随引擎发布），
+	# 一旦它能带脚本，就存在一条绕过授权闸门的通道 —— 而且是最好用的那条。
+	if base_scripts > 0:
+		printerr("自检失败：基础内容里有 %d 条 kind=\"script\"。脚本必须来自 mod 目录" % base_scripts)
 		ok = false
 
 	# 边界校验：内容用到的每个组件，契约里必须声明过。
@@ -134,8 +240,8 @@ func _selftest() -> bool:
 	print("网格实现 %d / 契约 %d 种" % [MESH_LIB.implemented().size(), declared_meshes.size()])
 	print("物理：刚体 %d / 障碍 %d / 地板 %d 块"
 		% [plan.dynamic_count(), plan.solid_static_count(), plan.rooms.size()])
-	print("行为：mod %d 个（%d 处挂载）/ 契约钩子 %d 个"
-		% [mods.get("files", 0), bus.handler_count(), declared.size()])
+	print("行为：mod %d 个 / 脚本 %d 个 / 挂载 %d 处 / 契约钩子 %d 个"
+		% [mod_units.size(), mods.get("files", 0), bus.handler_count(), declared.size()])
 	if ok:
 		print("自检通过")
 	return ok
