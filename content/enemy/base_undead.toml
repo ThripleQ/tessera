@@ -4,6 +4,10 @@ id = "enemy/base_undead"
 name = "亡灵（基类）"
 doc = "所有亡灵的公共模板。它本身不会被摆进世界，只作为 extends 的起点。"
 tags = ["undead"]
+# 不再靠 doc 里那句"它本身不会被摆进世界"来说服人 —— 那是给读者看的，
+# 引擎不读。abstract = true 是给引擎看的：它不进生成菜单，也不能被 spawner 指向。
+# 注意它**不继承**：骨行者和墓影各自都是具体内容。
+abstract = true
 
 [components.model]
 mesh = "humanoid_lowpoly"

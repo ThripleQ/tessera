@@ -43,13 +43,12 @@ from contract.registry import (  # noqa: E402
     MOD_LEVELS,
     PALETTES,
     SUPPORTED_API,
+    TOP_FIELDS,
+    Field,
     check_value,
 )
 
-ALLOWED_TOP = {
-    "api_version", "id", "kind", "extends", "name", "doc", "tags",
-    "components", "target", "source", "events",
-}
+OPS = ("set", "mul", "add")
 
 ## mod.toml 的 [mod] 段允许哪些字段。
 ## 白名单而不是黑名单：把 `levle` 拼错成 data 会让授权保护静默失效，
@@ -58,7 +57,6 @@ ALLOWED_MOD = {"id", "name", "version", "api_version", "level", "author", "descr
 MOD_REQUIRED = ("id", "name", "version", "api_version", "level")
 ## mod id 会成为目录名、存档键、日志前缀，所以只允许扁平的 ASCII。
 MOD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
-OPS = ("set", "mul", "add")
 
 
 @dataclass
@@ -118,9 +116,20 @@ def load_docs(dirs: list[str], errors: list[str]) -> list[Doc]:
                 errors.append(f"{rel(p)}: `id` 非法")
                 continue
 
-            for k in raw:
-                if k not in ALLOWED_TOP:
-                    errors.append(f"{rel(p)}: 未知的顶层字段 `{k}`")
+            for k, v in raw.items():
+                t = TOP_FIELDS.get(k)
+                if t is None:
+                    errors.append(
+                        f"{rel(p)}: 未知的顶层字段 `{k}`"
+                        f"（契约里有：{', '.join(sorted(TOP_FIELDS))}）"
+                    )
+                    continue
+                # 类型也要查。`abstract = "true"`（带引号）是一个字符串，
+                # 在 Python 里是真值，在 GDScript 里却是真值 —— 于是它"碰巧能用"，
+                # 直到某天有人把它读成 bool。这种情况必须当场拒绝。
+                problem = check_value(Field(t), v)
+                if problem:
+                    errors.append(f"{rel(p)}: 顶层字段 `{k}` {problem}")
 
             docs.append(Doc(cid, kind, p, order, raw))
     return docs
@@ -186,11 +195,28 @@ def resolve_one(
             body = deep_merge(pbody, body)
             body["_source"] = rel(doc.path)
 
+    # abstract **不继承**。它回答的是"这条内容本身能不能单独存在"，
+    # 而 extends 出来的是**另一条**内容，默认就该能存在。
+    #
+    # 如果让它跟着继承，给基类标一个 abstract 会连带把它的所有子类变成模板：
+    # 房间里那一整类东西会静默消失，而且编译期、运行期都不报错。
+    # 这是"抽象"这个词在继承体系里最容易搞反的一处，所以显式写出来。
+    if "abstract" not in doc.raw:
+        body.pop("abstract", None)
+
     cache[cid] = body
     return body
 
 
 def apply_patch(cid: str, body: dict, doc: Doc, errors: list[str]) -> None:
+    # `abstract` 不在 patch 能改的范围内。patch 的语义是"改一个已有东西的数值"，
+    # 而 abstract 决定"这东西还能不能存在"—— 通过 patch 把一个具体内容变成模板，
+    # 等于在玩家装了一个 mod 之后，世界里静默地少掉一整类东西。
+    if "abstract" in doc.raw:
+        errors.append(
+            f"{rel(doc.path)}: patch 不能改 `abstract`"
+            "（它决定目标能不能存在；要藏内容请直接改那一份内容）"
+        )
     comps = doc.raw.get("components", {})
     if not isinstance(comps, dict):
         errors.append(f"{rel(doc.path)}: `components` 必须是表")
@@ -298,7 +324,18 @@ def validate(cid: str, body: dict, errors: list[str]) -> None:
                 cval[fname] = fspec.default
 
 
-def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list[str]) -> None:
+def semantic_checks(
+    resolved: dict[str, dict],
+    errors: list[str],
+    warnings: list[str],
+    extended: set[str] | None = None,
+) -> None:
+    """跨内容的检查。单个文件自己看不出问题的地方，全在这里看。
+
+    extended：被谁 extends 过的 id 集合。用来发现"写了基类但没人继承"——
+    那通常意味着子类那边 `extends` 写错了名字，或者基类是复制粘贴的残留。
+    """
+    parents = extended or set()
     for cid, body in resolved.items():
         src = body.get("_source", cid)
         comps = body.get("components", {})
@@ -315,6 +352,14 @@ def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list
                     errors.append(f"{src}: `{cid}.spawner.archetype` 指向不存在的 id `{target}`")
                 elif resolved[target]["kind"] != "archetype":
                     errors.append(f"{src}: `{cid}.spawner.archetype` 指向的不是 archetype（`{target}`）")
+                elif resolved[target].get("abstract"):
+                    # 抽象基类的数据通常是不完整的（比如它故意不给 model，
+                    # 让子类各给各的）。把它填进房间的结果是一个半成品站在那儿，
+                    # 或者干脆一片空白 —— 两种都不会报错。
+                    errors.append(
+                        f"{src}: `{cid}.spawner.archetype` 指向抽象基类 `{target}`"
+                        "（它只能被 extends，不能直接摆进世界）"
+                    )
 
         if body["kind"] == "room" and "room" not in comps:
             errors.append(f"{src}: room 类型必须带 `room` 组件")
@@ -324,6 +369,12 @@ def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list
 
         if "ai" in comps and "move" not in comps:
             warnings.append(f"{src}: `{cid}` 有 ai 但没有 move，它不会动")
+
+        if body.get("abstract") and cid not in parents:
+            warnings.append(
+                f"{src}: `{cid}` 标了 abstract，但没有任何内容 extends 它"
+                "（它是死内容；如果是基类，检查子类的 extends 是不是写错了名字）"
+            )
 
         if "light" in comps and not comps["light"].get("flicker"):
             pass
@@ -422,6 +473,7 @@ def build_schema() -> dict:
 
     return {
         "components": components,
+        "top_fields": dict(TOP_FIELDS),
         "kinds": {
             n: {"doc": KINDS[n].doc, "require": list(KINDS[n].require)} for n in sorted(KINDS)
         },
@@ -483,7 +535,12 @@ def build_pack(
     for cid, body in resolved.items():
         validate(cid, body, errors)
 
-    semantic_checks(resolved, errors, warnings)
+    extended = {
+        d.raw["extends"]
+        for d in by_id.values()
+        if isinstance(d.raw.get("extends"), str)
+    }
+    semantic_checks(resolved, errors, warnings, extended)
     check_scripts(resolved, errors, warnings, script_root)
 
     counts: dict[str, int] = {}
@@ -682,6 +739,151 @@ def compile_one_mod(mod_dir: Path, base_dirs: list[str] | None = None) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# 6. 编译器自测
+# --------------------------------------------------------------------------
+
+
+SELFTEST_FILES: dict[str, dict[str, str]] = {
+    "abstract 不继承": {
+        "base.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/base"
+name = "基类"
+abstract = true
+[components.model]
+mesh = "prop_crate"
+""",
+        "child.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/child"
+extends = "t/base"
+name = "子类"
+""",
+    },
+    "抽象不能被 spawner 指向": {
+        "base.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/base"
+name = "基类"
+abstract = true
+[components.model]
+mesh = "prop_crate"
+""",
+        "room.toml": """
+api_version = 1
+kind = "room"
+id = "t/room"
+name = "房间"
+[components.room]
+size_x = 10.0
+size_z = 10.0
+[components.spawner]
+archetype = "t/base"
+count = 2
+""",
+    },
+    "顶层字段拼错": {
+        "bad.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/bad"
+name = "拼错"
+abstact = true
+""",
+    },
+    "顶层字段类型错": {
+        "bad.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/bad"
+name = "类型错"
+abstract = "true"
+""",
+    },
+    "patch 不能改 abstract": {
+        "crate.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/crate"
+name = "箱子"
+[components.model]
+mesh = "prop_crate"
+""",
+        "patch.toml": """
+api_version = 1
+kind = "patch"
+target = "t/*"
+abstract = true
+""",
+    },
+}
+
+## 每个场景"必须出现"的一段错误文本。空 = 必须编译通过。
+SELFTEST_EXPECT: dict[str, str] = {
+    "abstract 不继承": "",
+    "抽象不能被 spawner 指向": "抽象基类",
+    "顶层字段拼错": "未知的顶层字段 `abstact`",
+    "顶层字段类型错": "顶层字段 `abstract` 期望 true / false",
+    "patch 不能改 abstract": "patch 不能改 `abstract`",
+}
+
+
+def selftest() -> int:
+    """编译器自己的验收：拿几个**故意写坏**的小内容，确认它真的会拒绝。
+
+    理由和 lint_arch.py --selftest 一样：一个从来没抓到过东西的检查器，
+    和不存在没有区别 —— 而且更危险，因为它看起来是绿的。
+
+    这里特别盯住 `abstract` 的三条规则，因为它们的错法都是"静默"：
+    继承错了 = 一整类内容消失；拼错了 = 基类被当实体摆出来；
+    patch 能改 = 玩家装个 mod 之后世界上少一半东西。三种都不报错。
+    """
+    import tempfile
+
+    failed = 0
+    for name, files in SELFTEST_FILES.items():
+        want = SELFTEST_EXPECT[name]
+        with tempfile.TemporaryDirectory() as td:
+            for fname, text in files.items():
+                Path(td, fname).write_text(text.strip() + "\n", encoding="utf-8")
+            pack, errors, _warnings = build_pack([td])
+
+        joined = "\n".join(errors)
+        if want and want not in joined:
+            print(f"  ✗ {name}：期望报错包含「{want}」，实际 {errors or '没有报错'}", file=sys.stderr)
+            failed += 1
+            continue
+        if not want and errors:
+            print(f"  ✗ {name}：不该报错，实际 {errors}", file=sys.stderr)
+            failed += 1
+            continue
+
+        # 第一条规则还要看结果：子类必须**不带** abstract，否则它会从世界里消失。
+        if name == "abstract 不继承":
+            base = pack["entities"].get("t/base", {})
+            child = pack["entities"].get("t/child", {})
+            if not base.get("abstract"):
+                print("  ✗ abstract 不继承：基类自己没保留 abstract", file=sys.stderr)
+                failed += 1
+                continue
+            if child.get("abstract"):
+                print("  ✗ abstract 不继承：子类被继承成了模板（那一类内容会从世界里消失）", file=sys.stderr)
+                failed += 1
+                continue
+
+        print(f"  · {name}：符合预期")
+
+    if failed:
+        print(f"\n编译器自测失败：{failed} / {len(SELFTEST_FILES)} 条", file=sys.stderr)
+        return 1
+    print(f"编译器自测通过：{len(SELFTEST_FILES)} 条规则都能抓到违规")
+    return 0
+
+
 def emit_docs(path: Path) -> None:
     lines = ["# 组件参考（自动生成，勿手改）", "", f"由 contract/registry.py 生成，共 {len(COMPONENTS)} 个组件。", ""]
     for name in sorted(COMPONENTS):
@@ -744,8 +946,8 @@ def emit_binary(pack: dict, path: Path, quiet: bool = False) -> None:
     for cid, body in ents.items():
         comps = body.get("components", {})
         m = comps.get("model")
-        # 只有"有外观的 archetype"会被摆进世界；纯模板和道具不进
-        if body.get("kind") != "archetype" or m is None:
+        # 只有"有外观的具体 archetype"会被摆进世界；纯模板和道具不进
+        if body.get("kind") != "archetype" or m is None or body.get("abstract"):
             continue
         tr = comps.get("transform", {})
         li = comps.get("light")
@@ -785,7 +987,11 @@ def main() -> int:
     ap.add_argument("--bin", default=None, help="顺带输出给 C++ 运行时读的二进制包")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--docs", default=None, help="顺带生成组件参考文档")
+    ap.add_argument("--selftest", action="store_true", help="用故意写坏的内容验证编译器会拒绝")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     if args.mod and args.content:
         ap.error("--mod 与 --content 不能同时用：mod 有自己的一步编译，产物在它自己的目录里")

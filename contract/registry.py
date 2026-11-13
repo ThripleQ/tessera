@@ -31,6 +31,40 @@ MOD_LEVELS: dict[str, str] = {
     "script": "带脚本，运行时编译，完全权限。必须玩家显式授权",
 }
 
+## 每条内容的**顶层字段**。它们不是组件 —— 组件描述"它有什么"，
+## 这十来个字段描述"它是什么"，所以它们在契约里，不在内容里。
+##
+## 为什么要带类型：字段名拼错（`abstact = true`）必须当场报错。
+## 允许任意字段的后果是拼错静默不生效，而"静默不生效"在这个项目里的典型表现
+## 是"这个基类为什么被摆进世界了"——看起来完全正常，没人会去查。
+TOP_FIELDS: dict[str, str] = {
+    "api_version": "int",
+    "id": "str",
+    "kind": "str",
+    "extends": "str",
+    "name": "str",
+    "doc": "str",
+    "tags": "list",
+    "abstract": "bool",
+    "components": "dict",
+    "target": "str",   # patch 用：覆写谁
+    "source": "str",   # script 用：源码在哪
+    "events": "list",  # script 用：挂哪些钩子
+}
+
+## `abstract = true` 的含义：**这条内容只能被 extends，不能单独存在。**
+##
+## 为什么值得一个正式字段，而不是往 tags 里塞一根 "abstract" 字符串：
+## tags 是内容之间的约定（mod 可以往里面加任何东西），而"能不能出现在世界里"
+## 是**引擎的行为**。把引擎行为挂在一根内容字符串上，写错一个字母的后果
+## 是基类被当成实体摆出来，而那种错误看起来完全正常。
+##
+## 两条硬规则（contentc 会检查）：
+##   * 抽象内容不能被房间的 spawner 指向 —— 否则世界里会出现一个"模板"
+##   * 抽象内容不进生成菜单 —— 同理
+## 还有一条容易搞反的：**abstract 不继承**。给它标上 abstract 只影响它自己，
+## 否则所有子类会跟着变成模板，世界里一次性少掉一整类东西，而且没有任何报错。
+
 
 @dataclass(frozen=True)
 class Field:
@@ -201,6 +235,9 @@ def check_value(spec: Field, value: Any) -> str | None:
     elif t == "list":
         if not isinstance(value, list):
             return "期望数组"
+    elif t == "dict":
+        if not isinstance(value, dict):
+            return "期望表（[xxx] 段）"
     else:
         return f"未知字段类型 `{t}`"
 
