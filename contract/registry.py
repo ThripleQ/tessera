@@ -65,8 +65,9 @@ SYSTEMS: list[SystemSpec] = []
 BRAINS: tuple[str, ...] = ("idle", "patrol", "charger", "ambusher")
 LOOT_TABLES: tuple[str, ...] = ("none", "common", "rare")
 
-# 网格注册表：三角形数是帧预算的唯一真实来源。
-# 这些数字现在来自 game/src/mesh.hpp 里真的网格（编译时会校验），不再是人手估的。
+# 网格注册表：数据里只能引用这里出现过的 mesh。
+# 三角形数现在是**规划值**——真实网格资产要到 P0-b 才建出来，届时由工具直接从
+# 网格资源统计回填。在那之前这个数字不参与任何预算判断，只回答"这个 mesh 存不存在"。
 MESHES: dict[str, int] = {
     "humanoid_lowpoly": 96,   # 8 个盒子：躯干/头/四肢/胸甲/护肩
     "shade_lowpoly": 36,      # 六棱台袍子 + 头

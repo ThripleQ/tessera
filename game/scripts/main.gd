@@ -30,5 +30,18 @@ func _ready() -> void:
 			printerr("自检失败：内容包为空或没有可用网格")
 			get_tree().quit(1)
 			return
+
+		# 边界校验：内容用到的每个组件，契约里必须声明过。
+		# 编译期已经查过一遍，这里再查是防"旧 pack 配新引擎"这类错配 ——
+		# 那种情况下编译期检查根本没跑过。
+		var declared := {}
+		for c in pack.declared_components():
+			declared[c] = true
+		for c in pack.used_components():
+			if not declared.has(c):
+				printerr("自检失败：内容引用了契约里不存在的组件 `%s`" % c)
+				get_tree().quit(1)
+				return
+
 		print("自检通过")
 		get_tree().quit(0)

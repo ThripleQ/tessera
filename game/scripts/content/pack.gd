@@ -8,6 +8,9 @@ class_name ContentPack
 var api_version: int = 0
 var counts: Dictionary = {}
 var entities: Dictionary = {}
+## 契约快照：由 contract/registry.py 生成，随包一起走。
+## 引擎靠它知道"世界能有什么"，从而能算出"我现在能处理多少"。
+var schema: Dictionary = {}
 
 
 func load_from(path: String) -> bool:
@@ -24,9 +27,15 @@ func load_from(path: String) -> bool:
 	api_version = int(parsed.get("api_version", 0))
 	counts = parsed.get("counts", {})
 	entities = parsed.get("entities", {})
+	schema = parsed.get("schema", {})
 
 	if api_version <= 0:
 		push_error("内容包缺 api_version，拒绝加载")
+		return false
+	# schema 是硬要求。没有它，引擎就无法知道自己漏实现了哪些组件，
+	# 覆盖度会永远显示成一个好看的假数字。
+	if schema.is_empty():
+		push_error("内容包缺 schema 段（契约快照），拒绝加载。重新跑 tools/contentc.py")
 		return false
 	return true
 
@@ -65,6 +74,28 @@ func palette_ids() -> PackedStringArray:
 	return PackedStringArray(seen.keys())
 
 
+## 契约里声明过的全部组件（世界"能"有什么）。
+func declared_components() -> PackedStringArray:
+	var comps: Dictionary = schema.get("components", {})
+	var out := PackedStringArray(comps.keys())
+	out.sort()
+	return out
+
+
+## 这批内容实际用到的组件（世界"现在"有什么）。
+## 引擎的实现覆盖度按这个集合算，不按契约全集算 ——
+## 没被任何内容用到的组件，没实现也不影响这一版能跑。
+func used_components() -> PackedStringArray:
+	var seen := {}
+	for id in entities:
+		var comps: Dictionary = entities[id].get("components", {})
+		for c in comps:
+			seen[c] = true
+	var out := PackedStringArray(seen.keys())
+	out.sort()
+	return out
+
+
 func summary() -> String:
 	var lines: Array[String] = []
 	lines.append("内容包 v%d：%d 条" % [api_version, entities.size()])
@@ -75,4 +106,6 @@ func summary() -> String:
 	lines.append("可摆放原型 %d，网格 %d 种，配色 %d 种"
 		% [spawnables().size(), mesh_ids().size(), palette_ids().size()])
 	lines.append("网格：%s" % ", ".join(mesh_ids()))
+	lines.append("契约组件 %d 个，内容用到 %d 个"
+		% [declared_components().size(), used_components().size()])
 	return "\n".join(lines)

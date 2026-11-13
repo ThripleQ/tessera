@@ -32,7 +32,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from contract.registry import COMPONENTS, KINDS, MESHES, SUPPORTED_API, check_value  # noqa: E402
+from contract.registry import (  # noqa: E402
+    BRAINS,
+    COMPONENTS,
+    KINDS,
+    LOOT_TABLES,
+    MESHES,
+    SUPPORTED_API,
+    check_value,
+)
 
 ALLOWED_TOP = {"api_version", "id", "kind", "extends", "name", "doc", "tags", "components", "target"}
 OPS = ("set", "mul", "add")
@@ -311,6 +319,41 @@ def semantic_checks(resolved: dict[str, dict], errors: list[str], warnings: list
 # --------------------------------------------------------------------------
 
 
+def build_schema() -> dict:
+    """把契约层导出成数据，跟内容包一起走。
+
+    引擎侧靠它回答一个问题：「内容里用到的组件，我实现了几个？」
+    缺口从此可见，而不是等某个字段被静默忽略三个月。
+
+    这不是第二份真相：schema 永远由 contract/registry.py 生成，
+    手改会被下一次 check.sh 覆盖。真相只有 registry.py 一处。
+    """
+    components: dict[str, dict] = {}
+    for name in sorted(COMPONENTS):
+        spec = COMPONENTS[name]
+        fields: dict[str, dict] = {}
+        for fname in sorted(spec.fields):
+            fd = spec.fields[fname]
+            fields[fname] = {
+                "type": fd.type,
+                "default": fd.default,
+                "min": fd.min,
+                "max": fd.max,
+                "enum": list(fd.enum) if fd.enum else None,
+            }
+        components[name] = {"doc": spec.doc, "fields": fields}
+
+    return {
+        "components": components,
+        "kinds": {
+            n: {"doc": KINDS[n].doc, "require": list(KINDS[n].require)} for n in sorted(KINDS)
+        },
+        "brains": list(BRAINS),
+        "loot_tables": list(LOOT_TABLES),
+        "meshes": dict(MESHES),
+    }
+
+
 def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -361,6 +404,7 @@ def build_pack(dirs: list[str]) -> tuple[dict, list[str], list[str]]:
         "api_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "sources": dirs,
+        "schema": build_schema(),
         "counts": counts,
         "entities": {cid: resolved[cid] for cid in sorted(resolved)},
         "warnings": warnings,
