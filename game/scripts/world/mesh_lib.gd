@@ -6,21 +6,27 @@ extends RefCounted
 ## 不是内容。契约说世界有哪几种 mesh（schema.meshes），这里说引擎能画出几种；
 ## 两者之差由自检报出来，不会静默变成空场景。
 ##
-## 几何全部由 BoxMesh / CylinderMesh 拼成，三角形数与 registry.MESHES 的规划值对齐：
+## 几何全部由 BoxMesh / CylinderMesh 拼成，三角形数与 registry.MESHES 的规划值对齐。
 ##   humanoid_lowpoly  8 盒 = 96 tri
 ##   shade_lowpoly     六棱台 24 + 头 12 = 36 tri
 ##   prop_crate        1 盒 = 12 tri
 ##   prop_pillar       2 盒 = 24 tri
+##
+## 网格是引擎的实现细节，所以这里允许出现具体名字（见铁律 2 的例外条款）。
+
+const TOON_SHADER = preload("res://scripts/render/toon.gdshader")
+const OUTLINE_SHADER = preload("res://scripts/render/outline.gdshader")
 
 const IMPLEMENTED: Array[String] = [
 	"humanoid_lowpoly",
 	"shade_lowpoly",
 	"prop_crate",
 	"prop_pillar",
+	"player_lowpoly",
 ]
 
 static var _mesh_cache: Dictionary = {}
-static var _shared_material: StandardMaterial3D = null
+static var _shared_material: ShaderMaterial = null
 
 
 static func implemented() -> PackedStringArray:
@@ -37,15 +43,31 @@ static func missing(declared: PackedStringArray) -> PackedStringArray:
 
 
 ## 所有实例共用一份材质。颜色靠 MultiMesh 的 instance color，不靠材质数量。
-static func material() -> StandardMaterial3D:
+##
+## 描边走 next_pass：同一次提交的几何会被再画一遍背面，所以每批多一次提交。
+## 这是卡通渲染的固定成本，不是可以优化掉的东西。
+static func material() -> ShaderMaterial:
 	if _shared_material == null:
-		_shared_material = StandardMaterial3D.new()
-		# MultiMesh 的 instance color 走顶点色通道，不开启这个开关它不会调制 albedo，
-		# 整个世界会变成一片白。
-		_shared_material.vertex_color_use_as_albedo = true
-		_shared_material.roughness = 0.92
-		_shared_material.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		_shared_material = ShaderMaterial.new()
+		_shared_material.shader = TOON_SHADER
+		var ol := ShaderMaterial.new()
+		ol.shader = OUTLINE_SHADER
+		_shared_material.next_pass = ol
 	return _shared_material
+
+
+## 单独一份不共享的卡通材质，给玩家这类"要自己颜色"的独立网格用。
+## outline <= 0 时连描边 pass 都不挂 —— 地板这种大面积平面加描边只会脏。
+static func toon_material_for(color: Color, outline: float = 0.014) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = TOON_SHADER
+	m.set_shader_parameter("base_color", color)
+	if outline > 0.0:
+		var ol := ShaderMaterial.new()
+		ol.shader = OUTLINE_SHADER
+		ol.set_shader_parameter("width", outline)
+		m.next_pass = ol
+	return m
 
 
 static func build(mesh_id: String) -> ArrayMesh:
@@ -76,6 +98,33 @@ static func build(mesh_id: String) -> ArrayMesh:
 		"prop_pillar":
 			_box(st, Vector3(0.50, 2.20, 0.50), Vector3(0.00, 1.10, 0.00))
 			_box(st, Vector3(0.70, 0.16, 0.70), Vector3(0.00, 2.28, 0.00))
+		"player_lowpoly":
+			# 主角。全身 1.72 米、约 6.5 头身 —— 这个比例是"动漫感"的第一来源，
+			# 比多边形数重要得多：4 头身不管怎么打光都像玩具，6.5 头身哪怕全是色块
+			# 也一眼是动漫角色。
+			# 原点在脚底，**朝 -Z**（Godot 里相机和角色的前向都是 -Z，反过来会让
+			# 第三人称相机永远对着脸）。
+			_sphere(st, 0.135, Vector3(0.0, 1.585, 0.0), 0.96)                # 头
+			_box(st, Vector3(0.245, 0.075, 0.275), Vector3(0.0, 1.700, -0.005))  # 头顶发
+			_box(st, Vector3(0.235, 0.040, 0.05), Vector3(0.0, 1.662, -0.126))   # 刘海
+			_box(st, Vector3(0.215, 0.30, 0.085), Vector3(0.0, 1.500, 0.100))    # 脑后长发
+			_box(st, Vector3(0.045, 0.26, 0.05), Vector3(-0.128, 1.465, -0.020)) # 左鬓
+			_box(st, Vector3(0.045, 0.26, 0.05), Vector3(0.128, 1.465, -0.020))  # 右鬓
+			_cylinder(st, 0.055, 0.060, 0.09, Vector3(0.0, 1.445, 0.0), 8)    # 颈
+			_cylinder(st, 0.150, 0.115, 0.32, Vector3(0.0, 1.260, 0.0), 8)    # 胸
+			_box(st, Vector3(0.075, 0.10, 0.26), Vector3(-0.163, 1.395, 0.0)) # 左肩
+			_box(st, Vector3(0.075, 0.10, 0.26), Vector3(0.163, 1.395, 0.0))  # 右肩
+			_cylinder(st, 0.105, 0.100, 0.14, Vector3(0.0, 1.030, 0.0), 8)    # 腰
+			_cylinder(st, 0.110, 0.235, 0.19, Vector3(0.0, 0.865, 0.0), 8)    # 裙摆
+			for side in [-1.0, 1.0]:
+				var x: float = side * 0.078
+				_cylinder(st, 0.072, 0.062, 0.36, Vector3(x, 0.600, 0.0), 6)  # 大腿
+				_cylinder(st, 0.058, 0.050, 0.40, Vector3(x, 0.210, 0.0), 6)  # 小腿
+				_box(st, Vector3(0.10, 0.07, 0.20), Vector3(x, 0.035, -0.030)) # 脚
+				var ax: float = side * 0.212
+				_cylinder(st, 0.055, 0.050, 0.28, Vector3(ax, 1.280, 0.0), 6) # 上臂
+				_cylinder(st, 0.048, 0.044, 0.28, Vector3(ax, 1.020, 0.0), 6) # 前臂
+				_box(st, Vector3(0.075, 0.09, 0.08), Vector3(ax, 0.855, 0.0)) # 手
 		_:
 			push_error("网格 `%s` 在契约里存在，但引擎没有实现几何" % mesh_id)
 			return null
@@ -103,11 +152,23 @@ static func _box(st: SurfaceTool, size: Vector3, at: Vector3) -> void:
 	st.append_from(m, 0, Transform3D(Basis(), at))
 
 
-static func _cylinder(st: SurfaceTool, r_top: float, r_bottom: float, h: float, at: Vector3) -> void:
+static func _cylinder(st: SurfaceTool, r_top: float, r_bottom: float, h: float,
+		at: Vector3, segments: int = 6) -> void:
 	var m := CylinderMesh.new()
 	m.top_radius = r_top
 	m.bottom_radius = r_bottom
 	m.height = h
-	m.radial_segments = 6
+	m.radial_segments = segments
 	m.rings = 1
+	st.append_from(m, 0, Transform3D(Basis(), at))
+
+
+## 低段数球体。8×4 段约 64 三角形，比同尺寸的盒子贵，但头必须是圆的 ——
+## 方脑袋会立刻把 6.5 头身拉回"积木人"。
+static func _sphere(st: SurfaceTool, r: float, at: Vector3, squash: float = 1.0) -> void:
+	var m := SphereMesh.new()
+	m.radius = r
+	m.height = r * 2.0 * squash
+	m.radial_segments = 8
+	m.rings = 4
 	st.append_from(m, 0, Transform3D(Basis(), at))

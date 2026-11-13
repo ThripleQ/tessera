@@ -67,6 +67,16 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		_note_skip("原型 `%s` 没有 model 组件（抽象基类不能直接摆）" % arch_id)
 		return
 
+	var arch_comps: Dictionary = pack.entities[arch_id].get("components", {})
+	var collider: Dictionary = arch_comps.get("collider", {})
+	# 只有声明了 collider 且 dynamic 的东西才是刚体。引擎判断依据全在数据里，
+	# 不知道它叫"木箱"还是别的什么。
+	var is_dynamic := not collider.is_empty() and bool(collider.get("dynamic", false))
+	var spawn_height := float(spawner.get("height", 0.0))
+	# 静态物体没有"下落"这回事，给它一个空中起点只会变成悬空的错误摆设。
+	if not is_dynamic:
+		spawn_height = 0.0
+
 	var mesh_id := String(model.get("mesh", ""))
 	if MESH_LIB.build(mesh_id) == null:
 		_note_skip("网格 `%s` 引擎没实现几何，房间 `%s` 的内容被跳过" % [mesh_id, room_id])
@@ -85,12 +95,16 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		var ang := rng.randf() * TAU
 		# sqrt 让点在圆内均匀分布，否则会全挤在圆心
 		var dist := sqrt(rng.randf()) * max_r
-		var pos := center + Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
+		# 起始高度带一点抖动，落下来的样子才不会像一排同时松手的升降机
+		var drop := spawn_height * rng.randf_range(0.55, 1.0) if is_dynamic else 0.0
+		var pos := center + Vector3(cos(ang) * dist, drop, sin(ang) * dist)
 		var basis := Basis(Vector3.UP, rng.randf() * TAU)
 		room["items"].append({
 			"mesh": mesh_id,
 			"xform": Transform3D(basis, pos),
 			"color": color,
+			"collider": collider,
+			"dynamic": is_dynamic,
 		})
 
 
@@ -106,15 +120,41 @@ func instance_count() -> int:
 	return n
 
 
-## 提交次数 = 每块里出现过的网格种类数之和。同网格同块合成一次提交。
+## 静态部分：每块里出现过的网格种类数之和。同网格同块合成一次提交。
 func batch_count() -> int:
 	var n := 0
 	for room_id in rooms:
 		var seen := {}
 		for item in rooms[room_id]["items"]:
-			seen[item["mesh"]] = true
+			if not item["dynamic"]:
+				seen[item["mesh"]] = true
 		n += seen.size()
 	return n
+
+
+func dynamic_count() -> int:
+	var n := 0
+	for room_id in rooms:
+		for item in rooms[room_id]["items"]:
+			if item["dynamic"]:
+				n += 1
+	return n
+
+
+## 有碰撞体但钉住的物体数：会挡住玩家，但不参与模拟。
+func solid_static_count() -> int:
+	var n := 0
+	for room_id in rooms:
+		for item in rooms[room_id]["items"]:
+			if not item["dynamic"] and not (item["collider"] as Dictionary).is_empty():
+				n += 1
+	return n
+
+
+## 动态部分：每个刚体占一个 MeshInstance，没法合批 —— 这是"物理身份"的价格。
+## 沙盒里同屏几十个刚体是常态，所以这个数字必须显示出来，不能藏。
+func dynamic_draw_count() -> int:
+	return dynamic_count()
 
 
 func triangle_count() -> int:
@@ -137,8 +177,10 @@ func per_mesh() -> Dictionary:
 func summary() -> String:
 	var lines: Array[String] = []
 	lines.append("世界：%d 个块（一个房间一块）" % rooms.size())
-	lines.append("实例 %d 个，提交 %d 次，三角形 %d"
-		% [instance_count(), batch_count(), triangle_count()])
+	lines.append("实例 %d 个，三角形 %d" % [instance_count(), triangle_count()])
+	lines.append("  静态 %d 次提交（合批）＋ 动态 %d 次（刚体各自一格）"
+		% [batch_count(), dynamic_draw_count()])
+	lines.append("  刚体 %d 个，钉住的障碍 %d 个" % [dynamic_count(), solid_static_count()])
 	var pm := per_mesh()
 	if not pm.is_empty():
 		var keys := pm.keys()

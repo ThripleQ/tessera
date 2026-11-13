@@ -10,7 +10,7 @@ extends Node3D
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 
-static var _floor_mat: StandardMaterial3D = null
+static var _floor_mat: ShaderMaterial = null
 
 var room_id: String = ""
 var bounds := AABB()
@@ -21,14 +21,20 @@ var _instance_total := 0
 var _skipped: Array[String] = []
 
 
-func add_instance(mesh_id: String, xform: Transform3D, color: Color) -> bool:
+## 收一个待画的实例。
+## 刚体不进合批：MultiMesh 的所有实例共用一个节点，而物理需要每个物体一个身份。
+## 这条不是优化取舍，是两者结构上无法共存 —— 硬塞会导致物理只能整体推动。
+func add_instance(item: Dictionary) -> bool:
+	if bool(item.get("dynamic", false)):
+		return false
+	var mesh_id := String(item["mesh"])
 	if MESH_LIB.build(mesh_id) == null:
 		if not _skipped.has(mesh_id):
 			_skipped.append(mesh_id)
 		return false
 	if not _plan.has(mesh_id):
 		_plan[mesh_id] = []
-	_plan[mesh_id].append({"xform": xform, "color": color})
+	_plan[mesh_id].append({"xform": item["xform"], "color": item["color"]})
 	_instance_total += 1
 	return true
 
@@ -93,10 +99,7 @@ func realize() -> void:
 		add_child(floor_node)
 
 
-static func _floor_tint() -> StandardMaterial3D:
+static func _floor_tint() -> ShaderMaterial:
 	if _floor_mat == null:
-		_floor_mat = StandardMaterial3D.new()
-		_floor_mat.albedo_color = Color(0.30, 0.30, 0.33)
-		_floor_mat.roughness = 1.0
-		_floor_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		_floor_mat = MESH_LIB.toon_material_for(Color(0.42, 0.44, 0.50), 0.0)
 	return _floor_mat

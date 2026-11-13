@@ -1,0 +1,16 @@
+api_version = 1
+kind = "room"
+name = "杂物院"
+doc = "堆着木箱的空院。箱子是动态刚体，会掉、会滚、能被推。"
+tags = ["yard", "outdoor"]
+
+[components.room]
+size_x = 28.0
+size_z = 28.0
+lit = true
+
+[components.spawner]
+archetype = "prop/crate"
+count = 14
+radius = 9.0
+height = 1.6

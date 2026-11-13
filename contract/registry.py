@@ -66,23 +66,29 @@ BRAINS: tuple[str, ...] = ("idle", "patrol", "charger", "ambusher")
 LOOT_TABLES: tuple[str, ...] = ("none", "common", "rare")
 
 # 网格注册表：数据里只能引用这里出现过的 mesh。
-# 三角形数现在是**规划值**——真实网格资产要到 P0-b 才建出来，届时由工具直接从
-# 网格资源统计回填。在那之前这个数字不参与任何预算判断，只回答"这个 mesh 存不存在"。
+# 三角形数是**实测值**，不是估算：引擎自检会拿这里的数字和自己数出来的比，
+# 不一致就失败。这样"预算"才不会在改几何的过程中悄悄失真。
 MESHES: dict[str, int] = {
     "humanoid_lowpoly": 96,   # 8 个盒子：躯干/头/四肢/胸甲/护肩
-    "shade_lowpoly": 36,      # 六棱台袍子 + 头
+    "shade_lowpoly": 48,      # 六棱台袍子 36 + 头盒 12
     "prop_crate": 12,
     "prop_pillar": 24,
+    "player_lowpoly": 692,    # 球头 + 7 盒 + 12 段柱体。主角只有一个，贵得起
 }
 
 # 配色注册表：(r, g, b)，0..1 的 sRGB。
 # 颜色放在契约里而不是引擎里，是为了让引擎**不认识任何配色名**——
 # 加一个新配色只改这一处，引擎从内容包读到的就是新颜色。
 PALETTES: dict[str, tuple[float, float, float]] = {
-    "default": (0.72, 0.72, 0.70),
-    "bone": (0.86, 0.84, 0.76),
-    "violet": (0.45, 0.36, 0.62),
-    "wood": (0.48, 0.34, 0.22),
+    "default": (0.78, 0.78, 0.76),
+    "bone": (0.90, 0.88, 0.80),
+    "violet": (0.55, 0.43, 0.76),
+    "wood": (0.60, 0.42, 0.26),
+    # 卡通着色会把暗部压成色块，所以配色整体比写实路线亮一档、饱和一档。
+    # 这不是审美偏好，是渲染管线的补偿：同一份颜色在两个渲染器下观感差很远。
+    "azure": (0.42, 0.66, 0.94),
+    "blossom": (0.96, 0.66, 0.76),
+    "jade": (0.44, 0.80, 0.64),
 }
 
 
@@ -228,9 +234,13 @@ component(
 
 component(
     "collider",
-    "碰撞体。只支持简单图元，不做网格碰撞。",
+    "碰撞体。只支持简单图元，不做网格碰撞。dynamic 决定它是不是刚体——"
+    "这条由数据声明，引擎绝不按内容 id 判断（铁律 2）。",
     shape=Field("str", "capsule", enum=("capsule", "box", "sphere"), doc="形状"),
-    size=Field("float", 0.5, 0.05, 20.0, doc="特征尺寸"),
+    size=Field("float", 0.5, 0.05, 20.0, doc="特征尺寸：box 的边长，capsule/sphere 的直径"),
+    height=Field("float", 0.0, 0.0, 30.0, doc="总高。0 = 按形状推导（胶囊按人形比例）"),
+    mass=Field("float", 5.0, 0.1, 2000.0, doc="质量 kg，只有 dynamic 时有意义"),
+    dynamic=Field("bool", False, doc="true = 受重力与冲量的刚体；false = 钉住的障碍物"),
 )
 
 component(
@@ -239,6 +249,7 @@ component(
     archetype=Field("str", "", doc="要生成的原型 id"),
     count=Field("int", 1, 0, 500, doc="数量"),
     radius=Field("float", 10.0, 0.0, 200.0, doc="散布半径"),
+    height=Field("float", 0.0, 0.0, 50.0, doc="散布时的离地高度（有重力的东西会自己落下）"),
     respawn=Field("float", 0.0, 0.0, 600.0, doc="重生间隔秒，0 = 不重生"),
 )
 
