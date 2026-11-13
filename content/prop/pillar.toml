@@ -1,0 +1,16 @@
+api_version = 1
+kind = "archetype"
+id = "prop/pillar"
+name = "断柱"
+doc = "钉住不动的石柱。collider 不带 dynamic，所以它挡住路但不会倒、也推不动 —— 生成菜单里它是「固定」那一类。"
+tags = ["prop", "static"]
+
+[components.model]
+mesh = "prop_pillar"
+palette = "default"
+
+[components.collider]
+shape = "box"
+size = 0.62
+height = 2.44
+# mass 只有 dynamic 时才有意义，这里不写 —— 写了会让后来的人以为它可以被推。
