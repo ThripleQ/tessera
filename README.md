@@ -1,5 +1,7 @@
 # Tessera
 
+[![check](https://github.com/ThripleQ/tessera/actions/workflows/ci.yml/badge.svg)](https://github.com/ThripleQ/tessera/actions/workflows/ci.yml)
+
 **一个可以被第三方扩展的 3D 沙盒** —— 形态接近 GMod，而不是某个题材的游戏。
 
 三件事构成产品本身：
