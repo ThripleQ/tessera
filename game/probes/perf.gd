@@ -16,6 +16,7 @@ extends SceneTree
 
 const WARMUP := 30
 const FRAMES := 300
+const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 
 var _f := 0
@@ -77,7 +78,7 @@ func _report() -> void:
 		var mesh_id := String(pack.entities.get(cid, {}).get("components", {})
 			.get("model", {}).get("mesh", ""))
 		if mesh_id != "":
-			tris += MESH_LIB.triangles_of(mesh_id)
+			tris += ASSETS.triangles_of(mesh_id)
 	print("PERF 负载：实例 %d / 三角形 %d / 静态提交 %d / 刚体 %d / 静态物 %d / 预算已用 %d"
 		% [instances, tris, batches, world.bodies.size(), world.props.size(),
 			api.budget_used()])

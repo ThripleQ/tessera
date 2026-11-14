@@ -10,7 +10,7 @@ extends RefCounted
 ## 每一条检查都对应一种**静默失败**：不报错、不崩、只是世界变得不对。
 ## 这个项目最贵的 bug 都是这一类，所以检查写的不是"代码跑了"，而是"数据自洽"。
 
-const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+const ASSETS = preload("res://scripts/world/assets.gd")
 const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
 
 
@@ -88,17 +88,39 @@ static func run(app) -> bool:
 	# 契约里有这个网格，引擎就必须画得出来。缺一个都算失败 ——
 	# 否则那个东西会静默地从世界里消失，没有任何人会发现。
 	var declared_meshes: Dictionary = pack.schema.get("meshes", {})
-	var missing := MESH_LIB.missing(PackedStringArray(declared_meshes.keys()))
+	var missing := ASSETS.missing(PackedStringArray(declared_meshes.keys()))
 	if not missing.is_empty():
 		printerr("自检失败：契约里有这些网格但引擎没实现几何：%s" % ", ".join(missing))
 		ok = false
 
+	# 资源覆盖必须真的被这一轮验到：至少有一个 mod 换掉了内置几何。
+	# 只把通道写好、却没有任何资源包在用，是最典型的一种假绿。
+	# 坏文件 / 拼错文件名也不能静默吞掉 —— 装了却没生效最难查。
+	var covered: Dictionary = ASSETS.overrides()
+	if covered.is_empty():
+		printerr("自检失败：没有任何资源覆盖，外观开放通道没被验证到")
+		ok = false
+	for p in ASSETS.problems():
+		printerr("自检失败：资源覆盖有问题 —— %s" % p)
+		ok = false
+
 	# 三角形数必须与实测一致。改了几何却忘了改契约，预算就会在无人察觉的情况下失真，
 	# 而"预算失真"是这个项目最不能接受的一种错误 —— 它让人以为世界还装得下。
+	#
+	# 外部资源是**明确的例外**：契约里的数字是内置程序化几何的规划值，
+	# 覆盖后几何来自 mod 目录里的文件，那个数不再适用。这类网格改用运行时实测，
+	# 并要求 > 0（文件坏 / 没三角形 = 装了却没生效，不能算过）。
+	# 两边都打印，世界的真实负载才不会被"契约预算"这个旧数字盖住。
+	var covered_tris := 0
 	for mesh_id in declared_meshes:
 		var want := int(declared_meshes[mesh_id])
-		var got: int = MESH_LIB.triangles_of(String(mesh_id))
-		if want != got:
+		var got: int = ASSETS.triangles_of(String(mesh_id))
+		if covered.has(mesh_id):
+			covered_tris += got
+			if got <= 0:
+				printerr("自检失败：资源覆盖的网格 `%s` 没取出任何几何" % mesh_id)
+				ok = false
+		elif want != got:
 			printerr("自检失败：网格 `%s` 契约写 %d 三角形，引擎实测 %d" % [mesh_id, want, got])
 			ok = false
 
@@ -136,7 +158,8 @@ static func run(app) -> bool:
 			printerr("自检失败：房间 `%s` 没有地板尺寸，玩家会掉下去" % room_id)
 			ok = false
 
-	print("网格实现 %d / 契约 %d 种" % [MESH_LIB.implemented().size(), declared_meshes.size()])
+	print("网格实现 %d / 契约 %d 种；资源覆盖 %d 种（实测合计 %d tri，世界负载按实测算）"
+		% [ASSETS.implemented().size(), declared_meshes.size(), covered.size(), covered_tris])
 	print("物理：刚体 %d / 障碍 %d / 地板 %d 块"
 		% [plan.dynamic_count(), plan.solid_static_count(), plan.rooms.size()])
 	print("可生成：刚体 %d 种 / 固定 %d 种（清单来自内容，菜单里没有一行硬编码）"
