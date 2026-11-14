@@ -14,8 +14,10 @@ extends SceneTree
 var _main
 var _f := 0
 var _cid := ""
+var _system_id := ""
 var _component := ""
 var _field := ""
+var _ctx = null
 var _fields: Array[String] = []
 var _period := 0.25
 var _handle := 0
@@ -38,41 +40,48 @@ func _process(_delta: float) -> bool:
 	var loaded: Array = _main.mods.get("systems", [])
 	var runner = _main._systems
 
-	# 找「一个 mod 声明的组件 + 它的数值字段们 + 一件挂着它的刚体」。
-	# 不猜哪个字段会被系统写：跑完节拍后看哪个字段真的有了可变状态。
-	for cname in custom:
-		var spec: Dictionary = comps.get(String(cname), {})
-		var fields: Dictionary = spec.get("fields", {})
-		var numeric: Array[String] = []
-		for fname in fields:
-			var fd: Dictionary = fields.get(fname, {})
-			var t := String(fd.get("type", ""))
-			if t == "float" or t == "int":
-				numeric.append(String(fname))
-		if numeric.is_empty():
-			continue
-		for id in _main.pack.spawnables():
-			if not _main.pack.components_of(id).has(String(cname)):
-				continue
-			if not _main.pack.places_as_rigid(id):
-				continue
-			_cid = id
-			_component = String(cname)
-			_fields = numeric
-			_field = String(numeric[0])
-			break
-		if not _cid.is_empty():
-			break
-	for sid in systems:
+	# 以「系统」为起点找它自己的 writes、上下文和内容。不能再分别拿第一个组件、
+	# 第一个系统、contexts[0] 拼在一起：第二个 mod 系统出现后，那三者可能不是一组。
+	for entry in runner._mod_systems:
+		var sid := String(entry.get("id", ""))
 		var spec: Dictionary = systems.get(sid, {})
-		_period = float(spec.get("period", 0.25))
-		break
+		for raw_cname in spec.get("writes", []):
+			var cname := String(raw_cname)
+			if not custom.has(cname):
+				continue
+			var fields: Dictionary = comps.get(cname, {}).get("fields", {})
+			var numeric: Array[String] = []
+			for fname in fields:
+				var fd: Dictionary = fields.get(fname, {})
+				var t := String(fd.get("type", ""))
+				if t == "float" or t == "int":
+					numeric.append(String(fname))
+			if numeric.is_empty():
+				continue
+			for id in _main.pack.spawnables():
+				if not _main.pack.components_of(id).has(cname):
+					continue
+				if not _main.pack.places_as_rigid(id):
+					continue
+				_cid = id
+				_system_id = sid
+				_component = cname
+				_fields = numeric
+				_field = String(numeric[0])
+				_period = float(spec.get("period", 0.25))
+				_ctx = entry.get("ctx", null)
+				break
+			if _ctx != null:
+				break
+		if _ctx != null:
+			break
 
-	var declared_ok: bool = not custom.is_empty() and not systems.is_empty() and not _cid.is_empty()
+	var declared_ok: bool = not custom.is_empty() and not systems.is_empty() \
+		and not _cid.is_empty() and _ctx != null
 	var loaded_ok: bool = not loaded.is_empty() and runner != null \
 		and runner.extension_systems_count() > 0 and not runner.contexts.is_empty()
-	print("EXT 声明：自定义组件 %d 个 / 系统 %d 个 / 刚体 %s（%s）"
-		% [custom.size(), systems.size(), _cid, declared_ok])
+	print("EXT 声明：自定义组件 %d 个 / 系统 %d 个 / 受验系统 %s / 刚体 %s（%s）"
+		% [custom.size(), systems.size(), _system_id, _cid, declared_ok])
 	print("EXT 装载：编译 %d 个 / 调度 %d 个（%s）"
 		% [loaded.size(), runner.extension_systems_count() if runner != null else 0, loaded_ok])
 	if not declared_ok or not loaded_ok:
@@ -89,7 +98,7 @@ func _process(_delta: float) -> bool:
 		print("EXT 生成：handle %d，活着 %s，组件 `%s.%s`（%s）"
 			% [_handle, _main.api.exists(_handle), _component, _field, spawn_ok])
 
-		var ctx = runner.contexts[0]
+		var ctx = _ctx
 		var listed := false
 		for h in ctx.entities():
 			if int(h) == _handle:
