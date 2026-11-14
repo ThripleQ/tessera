@@ -8,6 +8,9 @@ extends SceneTree
 ##
 ## 两条路各测一遍：动态刚体（存位置+速度）和静态物（只存位置）。
 ## 只测动态的话，静态那条会一直"看起来能用"，直到有人真的放下一个柱子再关窗口。
+##
+## 背包也要测：它装的东西**不在世界里**，所以世界那份记录永远不会提到它们。
+## 不测的话，"关一次窗口捡的东西全没了"会一直存在，而且没人会想到是存档的锅。
 
 const SAVE = preload("res://scripts/save/store.gd")
 
@@ -18,6 +21,8 @@ var _saved := Vector3.ZERO
 var _saved_id := ""
 var _static_saved := Vector3.ZERO
 var _static_id := ""
+var _stack_id := ""
+var _stack_n := 0
 
 
 func _initialize() -> void:
@@ -50,6 +55,25 @@ func _process(_delta: float) -> bool:
 		_static_saved = at
 		print("SAVE 放下固定物 %s：%s（静态物 %d）"
 			% [_static_id, r.get("ok", false), _main._world.props.size()])
+
+	if _f == 30:
+		# 背包里塞一件。这里直接记账而不是走右键收：这一条验的是**存档**，
+		# 而"收"那条链路由 spawn_menu 探针负责（它走的是真射线）。
+		# 两条链路各自有主，重复测会让失败原因变模糊。
+		_main._player.bag().add(_static_id)
+		# 可堆叠的东西也要活过一次存读。只测单件的话，"×20 读回来变 ×1"
+		# 这种批量丢失会一直藏着 —— 而它的表现是玩家攒了一背包只剩一件。
+		_stack_id = ""
+		for id in _main.pack.spawnables():
+			if _main.pack.stack_limit(id) > 0:
+				_stack_id = id
+				break
+		if not _stack_id.is_empty():
+			for i in 3:
+				_main._player.bag().add(_stack_id)
+			_stack_n = _main._player.bag().count(_stack_id)
+		print("SAVE 背包：%s（%d 件）"
+			% [_main._player.bag().describe(), _main._player.bag().total()])
 
 	if _f == 90:
 		_target = _main._world.bodies[0]
@@ -86,16 +110,24 @@ func _process(_delta: float) -> bool:
 		if _main._world.props.size() > 0:
 			static_diff = _main._world.props[0].global_position.distance_to(_static_saved)
 		print("SAVE 固定物回位差 %.3f 米" % static_diff)
+		print("SAVE 读档后背包：%s" % _main._player.bag().describe())
 
 		# 四件事全对才算通过：位置回来了、数量没变、玩家也回来了、固定物也在。
+		# 第五件：背包也在 —— 它不在世界里，只能从存档里回来。
 		var count_ok: bool = _main._world.bodies.size() == 14
 		var pos_ok := diff < 0.15
 		var player_ok: bool = _main._player.global_position.distance_to(Vector3(500, 50, 500)) > 1.0
 		var static_ok: bool = _main._world.props.size() == 1 and static_diff < 0.05
-		print("RESULT 位置 %s / 数量 %s / 玩家 %s / 固定物 %s"
+		var bag_ok: bool = _main._player.bag().count(_static_id) == 1
+		# 可堆叠的那批必须一件不少地回来（3 件还是 3 件，不是 1 件）。
+		var stack_ok: bool = _stack_id.is_empty() \
+			or _main._player.bag().count(_stack_id) == _stack_n
+		bag_ok = bag_ok and stack_ok
+		print("RESULT 位置 %s / 数量 %s / 玩家 %s / 固定物 %s / 背包 %s"
 			% ["OK" if pos_ok else "FAIL", "OK" if count_ok else "FAIL",
-				"OK" if player_ok else "FAIL", "OK" if static_ok else "FAIL"])
-		var all_ok := pos_ok and count_ok and player_ok and static_ok
+				"OK" if player_ok else "FAIL", "OK" if static_ok else "FAIL",
+				"OK" if bag_ok else "FAIL"])
+		var all_ok := pos_ok and count_ok and player_ok and static_ok and bag_ok
 		# 通过了就删掉探针自己的存档。失败时留着 —— 那时候它是证据。
 		if all_ok:
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE.path()))

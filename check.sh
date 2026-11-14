@@ -92,7 +92,7 @@ if ! echo "$out" | grep -q '自检通过'; then
     fail=1
 fi
 
-step "6/7 存档往返（推箱子 + 放固定物 → 存 → 再推 → 读档）"
+step "6/7 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
 # 这一项必须真跑。自检只走到 Plan 层，不实例化玩家、不跑物理，
 # 所以坐标编码、刚体重建、handle 作废全在它的覆盖之外 ——
 # 而这类代码的错法是"看起来存了，读回来差一点"，只有对比数字能发现。
@@ -102,21 +102,23 @@ out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/save_rou
     -- --fresh --trust=all 2>&1)
 echo "$out" | grep -E '^(SAVE|RESULT)'
 no_engine_errors "$out" "存档往返" || fail=1
-if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物 OK'; then
+if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物 OK / 背包 OK'; then
     echo "存档往返未通过"
     fail=1
 fi
 
-step "7/7 生成菜单（开菜单 → 放刚体 → 放固定物 → 拆掉 → 关菜单）"
+step "7/7 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
 # 菜单是纯运行时 UI，自检一个节点都不建。它坏起来很安静：
 # "能打开但点了没反应"、"关掉之后操作还卡着"，两种都不报错。
-# 拆也在这里验：预算归还、房间障碍拆不掉 —— 后者是"内容 vs 玩家"那条分界的守卫。
+# 收 / 放回 / 堆叠也在这里验：预算归还、库存扣减、堆叠上限、
+# 价值合计、房间障碍收不走 —— 最后一条是"内容 vs 玩家"那条分界的守卫。
 # 无头也能验逻辑，只是拿不到截图 —— 截图只在本机有显示的时候产出。
 out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/spawn_menu.gd \
     -- --fresh --trust=all 2>&1)
-# SCRAPE 行也放出来：拆的四条路各错各的，失败时唯一有用的信息就在这几行里，
+# SCRAPE / STACK 行也放出来：拆的四条路和堆叠规则各错各的，
+# 失败时唯一有用的信息就在这几行里，
 # 而 RESULT 只告诉你"有一项 FAIL"——把它藏起来等于让下一个人从零开始复现。
-echo "$out" | grep -E '^(MENU|SCRAPE)'
+echo "$out" | grep -E '^(MENU|SCRAPE|STACK)'
 no_engine_errors "$out" "生成菜单" || fail=1
 if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     echo "生成菜单未通过"
