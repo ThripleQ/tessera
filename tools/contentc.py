@@ -38,7 +38,6 @@ from contract.registry import (  # noqa: E402
     COMPONENTS,
     HOOKS,
     KINDS,
-    LOOT_TABLES,
     MESHES,
     MOD_LEVELS,
     PALETTES,
@@ -361,6 +360,42 @@ def semantic_checks(
                         "（它只能被 extends，不能直接摆进世界）"
                     )
 
+        loot = comps.get("loot")
+        if loot and loot.get("table"):
+            target = loot.get("table")
+            if target not in resolved:
+                errors.append(f"{src}: `{cid}.loot.table` 指向不存在的 id `{target}`")
+            elif resolved[target]["kind"] != "loot_table":
+                errors.append(
+                    f"{src}: `{cid}.loot.table` 指向的不是 loot_table（`{target}`）"
+                )
+
+        if body["kind"] == "loot_table":
+            entries = body.get("entries", [])
+            if not isinstance(entries, list):
+                errors.append(f"{src}: loot_table `{cid}` 的 entries 必须是列表")
+            else:
+                for i, ent in enumerate(entries):
+                    if not isinstance(ent, dict):
+                        errors.append(f"{src}: `{cid}.entries[{i}]` 必须是一张表")
+                        continue
+                    drop = ent.get("id", "")
+                    if not drop:
+                        errors.append(f"{src}: `{cid}.entries[{i}]` 缺 id")
+                    elif drop not in resolved:
+                        errors.append(
+                            f"{src}: `{cid}.entries[{i}]` 指向不存在的 id `{drop}`"
+                        )
+                    elif resolved[drop]["kind"] != "item":
+                        errors.append(
+                            f"{src}: `{cid}.entries[{i}]` 掉的东西不是 item（`{drop}`）"
+                        )
+                    ch = ent.get("chance", None)
+                    if not isinstance(ch, (int, float)) or not (0.0 <= float(ch) <= 1.0):
+                        errors.append(
+                            f"{src}: `{cid}.entries[{i}].chance` 必须是 0 到 1 的数"
+                        )
+
         if body["kind"] == "room" and "room" not in comps:
             errors.append(f"{src}: room 类型必须带 `room` 组件")
 
@@ -478,7 +513,6 @@ def build_schema() -> dict:
             n: {"doc": KINDS[n].doc, "require": list(KINDS[n].require)} for n in sorted(KINDS)
         },
         "brains": list(BRAINS),
-        "loot_tables": list(LOOT_TABLES),
         "meshes": dict(MESHES),
         "palettes": {n: list(c) for n, c in sorted(PALETTES.items())},
         "hooks": {
@@ -820,6 +854,30 @@ target = "t/*"
 abstract = true
 """,
     },
+    "掉落表悬空引用": {
+        "enemy.toml": """
+api_version = 1
+kind = "archetype"
+id = "t/enemy"
+name = "怪"
+[components.model]
+mesh = "prop_crate"
+[components.loot]
+table = "t/nope"
+chance = 1.0
+""",
+    },
+    "掉落条目悬空": {
+        "table.toml": """
+api_version = 1
+kind = "loot_table"
+id = "t/table"
+name = "表"
+entries = [
+  { id = "t/nothing", chance = 0.5 },
+]
+""",
+    },
 }
 
 ## 每个场景"必须出现"的一段错误文本。空 = 必须编译通过。
@@ -829,6 +887,8 @@ SELFTEST_EXPECT: dict[str, str] = {
     "顶层字段拼错": "未知的顶层字段 `abstact`",
     "顶层字段类型错": "顶层字段 `abstract` 期望 true / false",
     "patch 不能改 abstract": "patch 不能改 `abstract`",
+    "掉落表悬空引用": "指向不存在的 id `t/nope`",
+    "掉落条目悬空": "指向不存在的 id `t/nothing`",
 }
 
 

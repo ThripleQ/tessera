@@ -1,0 +1,13 @@
+api_version = 1
+kind = "loot_table"
+id = "loot/common"
+name = "普通掉落"
+doc = "杂兵掉的东西。表是内容，所以 mod 可以用 patch 改这里的概率，或者加一条。"
+
+# 每条独立掷点：掉 0 件、1 件、2 件都可能。
+# 为什么不做成"掉一个，按权重挑"：沙盒的乐趣是地上的东西**变多**，
+# 而不是每次刚好一件。
+entries = [
+  { id = "item/bone_charm", chance = 0.8 },
+  { id = "item/rusted_blade", chance = 0.25 },
+]

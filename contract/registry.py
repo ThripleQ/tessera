@@ -50,6 +50,7 @@ TOP_FIELDS: dict[str, str] = {
     "target": "str",   # patch 用：覆写谁
     "source": "str",   # script 用：源码在哪
     "events": "list",  # script 用：挂哪些钩子
+    "entries": "list",  # loot_table 用：一组 {id, chance}
 }
 
 ## `abstract = true` 的含义：**这条内容只能被 extends，不能单独存在。**
@@ -124,7 +125,6 @@ HOOKS: dict[str, HookSpec] = {}
 
 # 行为注册表：数据里只能引用已注册的 brain，不能凭空写字符串
 BRAINS: tuple[str, ...] = ("idle", "patrol", "charger", "ambusher")
-LOOT_TABLES: tuple[str, ...] = ("none", "common", "rare")
 
 # 网格注册表：数据里只能引用这里出现过的 mesh。
 # 三角形数是**实测值**，不是估算：引擎自检会拿这里的数字和自己数出来的比，
@@ -298,8 +298,10 @@ component(
 
 component(
     "loot",
-    "掉落。",
-    table=Field("str", "none", enum=LOOT_TABLES, doc="掉落表"),
+    "掉落。`table` 是一个 **loot_table 内容的 id**，不是写死的表名 ——\n"
+    "    表本身是内容，所以 mod 能加自己的表，也能覆写已有的。\n"
+    "    编译期会查它指的那条真的存在且真是 loot_table（悬空引用当场报错）。",
+    table=Field("str", "", doc="掉落表的内容 id（kind = loot_table）。空 = 不掉东西"),
     chance=Field("float", 0.0, 0.0, 1.0, doc="掉落概率"),
 )
 
@@ -420,6 +422,14 @@ kind("archetype", "世界里被摆放的东西：怪、道具、装饰", require
 kind("item", "背包里的东西", require=("name",))
 kind("room", "一个空间单元", require=("name",))
 kind("patch", "覆写别人的内容（mod 专用）", require=("target",))
+kind(
+    "loot_table",
+    "掉落表。entries 是一组 `{id, chance}`，id 指向一条 item。\n"
+    "    为什么表是内容而不是代码：'这个怪掉什么'是内容作者的决定，\n"
+    "    而 mod 要能加自己的表、也能用 patch 覆写别人的表 ——\n"
+    "    两条路都要求表本身是可寻址的内容，而不是引擎里的一张字典。",
+    require=("entries",),
+)
 kind(
     "script",
     "行为 mod。声明源码位置和它要挂的事件，引擎运行时编译并绑定。"

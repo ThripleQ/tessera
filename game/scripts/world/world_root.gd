@@ -40,6 +40,14 @@ var _speeds: Dictionary = {}
 ## 否则剔除退化成"什么都不剔"时，验收照样全绿，只是帧时慢慢涨。
 var cull_stats := {"shown": 0, "hidden": 0}
 
+## 这一帧发生的撞击，给系统用（vitals 据此算伤害），用完就清。
+##
+## 为什么不直接给 vitals 发消息：world 不该认识"谁在处理撞击"。
+## 它只负责记下发生了什么，谁消费是装配层的事。
+## 注意它**不是**发给 mod 的那份：这一份带节点（引擎内部用），
+## 发给 mod 的那份只有 handle —— mod 拿到节点树的那天，引擎的内部结构就被钉死了。
+var impacts: Array = []
+
 
 func realize(plan) -> void:
 	_add_ground(plan)
@@ -87,6 +95,9 @@ func _register_body(rb: RigidBody3D, item: Dictionary) -> void:
 	bodies.append(rb)
 	var h: int = api.register(rb, String(item.get("id", ""))) if api != null else 0
 	rb.set_meta("handle", h)
+	# 出生点。AI 的游荡和栓绳都围着它转 —— 不记下来的话，
+	# 一只"绕着家门口转圈"的怪会以它被扔到的地方为家。
+	rb.set_meta("home", rb.global_position)
 	rb.contact_monitor = true
 	rb.max_contacts_reported = 2
 	rb.body_entered.connect(_on_body_entered.bind(rb))
@@ -104,6 +115,9 @@ func _on_body_entered(other: Node, rb: RigidBody3D) -> void:
 	var spd: float = float(_speeds.get(rb, 0.0))
 	if spd < IMPACT_MIN_SPEED:
 		return
+	# 引擎自己那份（带节点，给 vitals 算伤害）先记。
+	# 放在 bus 之前，而且**不看 bus 是不是 null** —— 没有 mod 的平台也必须会疼。
+	impacts.append({"node": rb, "speed": spd})
 	if bus == null:
 		return
 	bus.emit("impact", {

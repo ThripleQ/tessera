@@ -86,6 +86,15 @@ static func make_dynamic(item: Dictionary) -> RigidBody3D:
 	# 扔出去的初速可以很快，不连续检测会直接穿墙。
 	body.continuous_cd = true
 
+	# 会走的东西不许翻倒。它是个"站着的"，不是个"滚着的" ——
+	# 转向由 locomotion 控制（只写 yaw），物理不该把它甩得四脚朝天。
+	#
+	# 判断依据是**数据**（`move.speed > 0`），不是形状、更不是名字（铁律 2）。
+	# 反过来说：一个没有 move 的胶囊是桶，它就该滚。
+	var mv: Dictionary = item.get("components", {}).get("move", {})
+	if float(mv.get("speed", 0.0)) > 0.0:
+		body.lock_rotation = true
+
 	var cs := CollisionShape3D.new()
 	cs.shape = shape_of(collider)
 	cs.position = Vector3(0.0, h * 0.5, 0.0)

@@ -15,5 +15,5 @@ speed = 1.8
 brain = "charger"
 
 [components.loot]
-table = "common"
+table = "loot/common"
 chance = 0.4

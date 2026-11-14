@@ -1,0 +1,10 @@
+api_version = 1
+kind = "loot_table"
+id = "loot/rare"
+name = "稀有掉落"
+doc = "精英掉的东西。锈刃的权重比普通表高 —— 表是内容，这条差异就是内容作者写的。"
+
+entries = [
+  { id = "item/rusted_blade", chance = 0.55 },
+  { id = "item/bone_charm", chance = 0.45 },
+]

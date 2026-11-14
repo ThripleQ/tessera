@@ -27,5 +27,5 @@ intensity = 1.4
 flicker = true
 
 [components.loot]
-table = "rare"
+table = "loot/rare"
 chance = 0.15

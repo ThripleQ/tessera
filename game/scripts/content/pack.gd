@@ -87,6 +87,23 @@ func label_of(content_id: String) -> String:
 	return n if not n.is_empty() else content_id
 
 
+## 一条内容的完整记录。给需要读**顶层字段**的调用方（比如掉落表的 `entries`）。
+## 一般情况下请用 `components_of` —— 组件才是内容对外的形状。
+func entity_of(content_id: String) -> Dictionary:
+	var e = entities.get(content_id, null)
+	return e if e is Dictionary else {}
+
+
+## 一条内容的全部组件。给系统用 —— 系统是解读组件的地方，
+## 而 Pack 只负责"按 id 取出数据"。
+##
+## 为什么不给每个组件写一个查询函数：那会让 Pack 长成一个
+## "什么都懂一点"的上帝对象，而且每加一个组件就要回来改它 ——
+## 那正是"内容即数据"要避免的耦合。
+func components_of(content_id: String) -> Dictionary:
+	return entity_of(content_id).get("components", {})
+
+
 ## 堆叠上限：同一个 id 在背包里最多几件。0 = 不限。
 ##
 ## 数字只来自内容的 `pickup.stack`，引擎不写死任何数值（铁律 2）。
@@ -243,6 +260,9 @@ func item_for(content_id: String, xform: Transform3D) -> Dictionary:
 		"collider": collider,
 		# 引擎永远按数据判断"会不会动"，不按名字。铁律 2。
 		"dynamic": not collider.is_empty() and bool(collider.get("dynamic", false)),
+		# 整份组件也带上：物理层要按 `move` 判断"这是个站着的还是个滚着的"，
+		# 而判断的依据必须是数据。只带 collider 的话，那一层就只能猜。
+		"components": comps,
 	}
 
 

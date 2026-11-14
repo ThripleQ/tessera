@@ -20,6 +20,7 @@ const REGISTRY = preload("res://scripts/mods/registry.gd")
 const SAVE = preload("res://scripts/save/store.gd")
 const SPAWN_MENU = preload("res://scripts/ui/spawn_menu.gd")
 const RETICLE = preload("res://scripts/ui/reticle.gd")
+const SYSTEMS = preload("res://scripts/systems/runner.gd")
 const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
@@ -46,6 +47,9 @@ var _tick_acc := 0.0
 var _frames := 0
 var _world = null
 var _player = null
+## 系统层。move / ai / health / loot 由它每帧执行 ——
+## 在此之前那些组件是死数据：菜单里的骨行者放下去是个雕像。
+var _systems = null
 
 
 func _ready() -> void:
@@ -196,6 +200,11 @@ func _setup_scene() -> void:
 	_player.position = _start_position(_world)
 	_world.attach_camera(_player.camera())
 
+	# 系统层在世界和玩家都就位之后才能跑：它要读 world.bodies，
+	# 而那个数组在 realize 之后才有人。晚一帧启动没关系，缺了它全盘皆输。
+	_systems = SYSTEMS.new()
+	_systems.setup(_world, _player, api, bus, pack)
+
 	# 菜单要在玩家之后建：它要接管玩家输入。
 	var menu = SPAWN_MENU.new()
 	menu.name = "spawn_menu"
@@ -287,6 +296,13 @@ func _notification(what: int) -> void:
 		_save_now(true)
 		get_tree().quit()
 
+
+
+## 系统层挂在物理帧上，不是渲染帧：移动要写速度、伤害来自撞击，
+## 两件事都发生在物理步里。挂在渲染帧上的话，帧率一变行为就变。
+func _physics_process(delta: float) -> void:
+	if _systems != null:
+		_systems.step(delta)
 
 
 ## 固定节拍的 tick。用累加器而不是"每 N 帧"，因为帧率会变，节拍不该跟着变。
