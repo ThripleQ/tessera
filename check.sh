@@ -33,7 +33,7 @@ no_engine_errors() {   # $1=输出  $2=步骤名
 # 而且错误只是 `No such file or directory`，看起来像环境问题。
 mkdir -p build
 
-step "1/7 编译基础内容（解析 → 继承 → 校验 → 产物）"
+step "1/8 编译基础内容（解析 → 继承 → 校验 → 产物）"
 # 先验证编译器本身没退化成"永远接受"，再编译真内容。
 # 一个从来没拒绝过东西的校验器，和不存在没有区别 —— 而且它还是绿的。
 if out=$(python3 tools/contentc.py --selftest 2>&1); then
@@ -45,7 +45,7 @@ fi
 python3 tools/contentc.py --content content \
     --out build/content.pack.json --bin build/content.pack.bin --report || fail=1
 
-step "2/7 编译每个 mod（各自独立产物）"
+step "2/8 编译每个 mod（各自独立产物）"
 # mod 是可独立发布的单元，所以它有自己的一步编译。这里不合并成一个包：
 # 合并是运行时的事（按授权顺序叠加），编译期合并会让"谁覆盖了谁"变得不可见。
 for d in mods/*/; do
@@ -53,7 +53,7 @@ for d in mods/*/; do
     python3 tools/contentc.py --mod "$d" --base content || fail=1
 done
 
-step "3/7 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
+step "3/8 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
 # 先验证检查器本身没退化成"永远通过"，再跑真正的检查。
 if python3 tools/lint_arch.py --selftest > build/lint_selftest.log 2>&1; then
     echo "检查器自测：通过（R1-R7 每条都能抓到违规）"
@@ -63,7 +63,7 @@ else
 fi
 python3 tools/lint_arch.py || fail=1
 
-step "4/7 同步内容包到 Godot 工程"
+step "4/8 同步内容包到 Godot 工程"
 cp build/content.pack.json game/content.pack.json || fail=1
 
 # 行为 mod 的源码是运行时从磁盘编译的，根目录得显式给 —— 否则 CI 里找不到文件，
@@ -78,7 +78,7 @@ if [ ! -x "$GODOT" ]; then
     exit 1
 fi
 
-step "5/7 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
+step "5/8 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
 # --trust=all：验收必须真的跑到脚本通道。不授权的话带脚本的 mod 会被
 # 授权闸门挡住，自检发现"一个脚本都没加载"就判失败 —— 那种绿毫无意义。
 #
@@ -92,7 +92,7 @@ if ! echo "$out" | grep -q '自检通过'; then
     fail=1
 fi
 
-step "6/7 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
+step "6/8 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
 # 这一项必须真跑。自检只走到 Plan 层，不实例化玩家、不跑物理，
 # 所以坐标编码、刚体重建、handle 作废全在它的覆盖之外 ——
 # 而这类代码的错法是"看起来存了，读回来差一点"，只有对比数字能发现。
@@ -107,7 +107,7 @@ if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物
     fail=1
 fi
 
-step "7/7 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
+step "7/8 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
 # 菜单是纯运行时 UI，自检一个节点都不建。它坏起来很安静：
 # "能打开但点了没反应"、"关掉之后操作还卡着"，两种都不报错。
 # 收 / 放回 / 堆叠也在这里验：预算归还、库存扣减、堆叠上限、
@@ -125,9 +125,26 @@ if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     fail=1
 fi
 
+step "8/8 帧时基线（300 帧，同机回归用，不设断言）"
+# **这一步没有失败条件**，它是唯一一个故意不判对错的步骤。
+#
+# 为什么破例：帧时的绝对值依赖机器。开发机没有 GPU、只能软件光栅，
+# 在这里设阈值 = 在 CI 上设一个天天翻脸的红灯，而红灯一旦习惯性被忽略，
+# 就等于没有红灯。所以它只打印，供人和**同一台机器的上一次**比。
+#
+# 它拦的是"功能全绿但游戏卡了"那一类问题：三个探针的断言都只看结果对不对，
+# 没有一个看每帧花了多少。而这类退化不会自己报警 —— 等玩家说"卡"的时候，
+# 已经不知道是哪一次提交带进来的了。
+#
+# 仍然查引擎报错：报错和帧时无关，但报错的东西不该出现在任何一步里。
+out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/perf.gd \
+    -- --fresh --trust=all 2>&1)
+echo "$out" | grep -E '^(PERF)'
+no_engine_errors "$out" "帧时基线" || fail=1
+
 echo
 if [ "$fail" -ne 0 ]; then
     printf '\033[31m验收失败\033[0m\n'
     exit 1
 fi
-printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、存档能往返、菜单能生成、引擎无报错\n'
+printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、存档能往返、菜单能生成、引擎无报错、帧时有基线\n'
