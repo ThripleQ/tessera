@@ -1,0 +1,15 @@
+api_version = 1
+kind = "component_spec"
+id = "kinetics/repulsor_spec"
+name = "脉冲排斥"
+key = "repulsor"
+doc = """
+把一件刚体变成近距排斥器。字段全部是公开数据：agent 可以改半径、力度和冷却，
+不需要改脚本；换一套行为时才改系统。remaining 是运行时状态，本轮仍不跨存档。
+"""
+fields = [
+  { name = "radius", type = "float", default = 3.0, min = 0.5, max = 8.0, doc = "影响半径，米" },
+  { name = "strength", type = "float", default = 8.0, min = 0.0, max = 30.0, doc = "每次脉冲的冲量，牛秒" },
+  { name = "cooldown", type = "float", default = 1.0, min = 0.25, max = 5.0, doc = "两次脉冲之间的秒数" },
+  { name = "remaining", type = "float", default = 0.0, min = 0.0, max = 5.0, doc = "剩余冷却，运行时可写" },
+]

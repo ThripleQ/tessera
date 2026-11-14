@@ -1,0 +1,12 @@
+[mod]
+id = "kinetics"
+name = "agent 玩法示例：脉冲排斥器"
+version = "1.0.0"
+api_version = 1
+author = "tessera 官方示例"
+level = "script"
+description = """
+一份只通过公开扩展通道制作的真实物理玩法：脉冲排斥器按固定节拍推开附近刚体。
+它不认识箱子、敌人或任何内容 id；以后 agent 新增的刚体也能自动参与。
+这个示例同时是第 12 步验收的负载，证明 L4 不只改颜色，还能改变物理世界。
+"""

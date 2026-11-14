@@ -1,0 +1,26 @@
+api_version = 1
+kind = "archetype"
+id = "kinetics/repulsor"
+name = "脉冲排斥器"
+doc = "周期性推开附近的任意刚体。数值都在 components.repulsor，可直接由 agent 修改。"
+
+[components.model]
+mesh = "prop_gem"
+palette = "azure"
+
+[components.collider]
+shape = "box"
+size = 0.7
+height = 0.7
+mass = 8.0
+dynamic = true
+
+[components.repulsor]
+radius = 3.0
+strength = 8.0
+cooldown = 1.0
+remaining = 0.0
+
+[components.pickup]
+stack = 1
+value = 30

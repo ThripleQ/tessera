@@ -1,0 +1,13 @@
+api_version = 1
+kind = "system"
+id = "kinetics/repulsor_system"
+name = "近距脉冲规则"
+source = "scripts/repulsor_system.gd"
+priority = 130
+period = 0.25
+reads = ["repulsor"]
+writes = ["repulsor"]
+doc = """
+每 0.25 秒检查一次带 repulsor 的实体。冷却结束后，对半径内的其它刚体施加冲量。
+reads / writes 只允许访问自己的组件；世界操作仍走公开 api，不接触引擎节点。
+"""
