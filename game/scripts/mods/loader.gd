@@ -6,7 +6,7 @@ extends RefCounted
 ## 因为脚本路径必须相对 mod 自己的目录解析。mod 是可独立发布的单元，
 ## 它不知道仓库根在哪，也不该知道。
 ##
-## 加载流程四步：读源码 → 编译 → 实例化 → 绑定事件。
+## 加载流程四步：读源码 → 编译 → 实例化 → 绑定事件 / 交给系统调度器。
 ## 这一步用掉 Godot 唯一一条真正开放的通道：GDScript 能在运行时从磁盘编译。
 ## 实测（docs/decisions/0003-open-channels.md）：
 ##   * 任意路径的 .gd 可以 reload() 成功并实例化调用
@@ -19,13 +19,19 @@ extends RefCounted
 ## mod 必须 extends RefCounted。不是洁癖：selftest 里不建场景，
 ## 一个 extends Node 的 mod 会在退出时变成 ObjectDB 泄漏警告，
 ## 而那些警告会淹掉真正的失败信息（这个坑踩过一次）。
-const REQUIRED_METHOD := "handle"
+const HANDLER_METHOD := "handle"
+const SYSTEM_METHOD := "step"
 
 
-## 返回 {loaded: Array[String], errors: Array[String], files: int, hooks: int}
+## 返回 {loaded, errors, files, hooks, systems}
+##
+## `systems` 是 L4 的编译结果：每项 {id, mod_id, source, priority, reads,
+## writes, period, instance}。它们不绑事件总线，交给系统调度器按优先级跑。
+## 事件脚本与系统脚本共用这一处编译 —— 运行时编译 GDScript 的入口永远只有一个。
 static func load_all(units: Array, bus) -> Dictionary:
 	var loaded: Array[String] = []
 	var errors: Array[String] = []
+	var systems: Array[Dictionary] = []
 	var files := 0
 	var hooks := 0
 
@@ -36,7 +42,8 @@ static func load_all(units: Array, bus) -> Dictionary:
 
 		for cid in entities:
 			var body: Dictionary = entities[cid]
-			if String(body.get("kind", "")) != "script":
+			var kind := String(body.get("kind", ""))
+			if kind != "script" and kind != "system":
 				continue
 			files += 1
 
@@ -49,8 +56,23 @@ static func load_all(units: Array, bus) -> Dictionary:
 				errors.append("%s/%s：找不到脚本 `%s`（找的是 %s）" % [mod_id, cid, source, path])
 				continue
 
-			var inst = _compile(path, "%s/%s" % [mod_id, cid], errors)
+			var want := HANDLER_METHOD if kind == "script" else SYSTEM_METHOD
+			var inst = _compile(path, "%s/%s" % [mod_id, cid], errors, want)
 			if inst == null:
+				continue
+
+			if kind == "system":
+				systems.append({
+					"id": String(cid),
+					"mod_id": mod_id,
+					"source": source,
+					"priority": int(body.get("priority", 0)),
+					"reads": body.get("reads", []),
+					"writes": body.get("writes", []),
+					"period": float(body.get("period", 0.25)),
+					"instance": inst,
+				})
+				loaded.append("%s：%s → 系统 p=%d" % [mod_id, source, int(body.get("priority", 0))])
 				continue
 
 			var events: Array = body.get("events", [])
@@ -61,10 +83,16 @@ static func load_all(units: Array, bus) -> Dictionary:
 			hooks += bound.size()
 			loaded.append("%s：%s → %s" % [mod_id, source, ", ".join(bound)])
 
-	return {"loaded": loaded, "errors": errors, "files": files, "hooks": hooks}
+	return {
+		"loaded": loaded,
+		"errors": errors,
+		"files": files,
+		"hooks": hooks,
+		"systems": systems,
+	}
 
 
-static func _compile(path: String, label: String, errors: Array[String]):
+static func _compile(path: String, label: String, errors: Array[String], want: String):
 	var text := FileAccess.get_file_as_string(path)
 	var script := GDScript.new()
 	script.source_code = text
@@ -80,8 +108,13 @@ static func _compile(path: String, label: String, errors: Array[String]):
 	if inst is Node:
 		errors.append("%s：mod 必须 extends RefCounted，不能是 Node（生命周期归引擎管）" % label)
 		return null
-	if not inst.has_method(REQUIRED_METHOD):
-		errors.append("%s：缺少 func %s(event, ctx, api)" % [label, REQUIRED_METHOD])
+	if not inst.has_method(want):
+		var signature: String = ""
+		if want == HANDLER_METHOD:
+			signature = "func %s(event, ctx, api)" % want
+		else:
+			signature = "func %s(ctx, api)" % want
+		errors.append("%s：缺少 %s" % [label, signature])
 		return null
 	return inst
 

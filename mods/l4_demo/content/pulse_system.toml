@@ -1,0 +1,13 @@
+api_version = 1
+kind = "system"
+id = "l4_demo/pulse_system"
+name = "脉动规则"
+source = "scripts/pulse_system.gd"
+priority = 120
+period = 0.25
+reads = ["pulse"]
+writes = ["pulse"]
+doc = """
+固定节拍规则：读 rate / charge，写回 charge，再用 api.tint 改变颜色。
+reads / writes 是权限清单，priority 决定和别的 mod 系统之间的先后顺序。
+"""

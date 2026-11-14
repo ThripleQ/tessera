@@ -1,6 +1,8 @@
 extends RefCounted
 class_name ContentPack
 
+const VALIDATOR = preload("res://scripts/content/validator.gd")
+
 ## 读 content.pack.json。
 ## 这里刻意不做任何"理解内容"的事：只把数据结构化，并回答两个问题——
 ## 有多少东西、它们用什么网格。判断"世界怎么跑"是 game/ 其他部分的事。
@@ -11,6 +13,8 @@ var entities: Dictionary = {}
 ## 契约快照：由 contract/registry.py 生成，随包一起走。
 ## 引擎靠它知道"世界能有什么"，从而能算出"我现在能处理多少"。
 var schema: Dictionary = {}
+## L4 扩展声明：基础内容自带的组件 / 系统（基础内容不许带可执行代码）。
+var extensions: Dictionary = {}
 
 
 func load_from(path: String) -> bool:
@@ -28,6 +32,7 @@ func load_from(path: String) -> bool:
 	counts = parsed.get("counts", {})
 	entities = parsed.get("entities", {})
 	schema = parsed.get("schema", {})
+	extensions = parsed.get("extensions", {})
 
 	if api_version <= 0:
 		push_error("内容包缺 api_version，拒绝加载")
@@ -36,6 +41,9 @@ func load_from(path: String) -> bool:
 	# 覆盖度会永远显示成一个好看的假数字。
 	if schema.is_empty():
 		push_error("内容包缺 schema 段（契约快照），拒绝加载。重新跑 tools/contentc.py")
+		return false
+	if not schema.has("extensions"):
+		push_error("内容包缺 schema.extensions（L4 扩展规则），拒绝加载旧产物。重新跑 tools/contentc.py")
 		return false
 	return true
 
@@ -198,19 +206,49 @@ func used_components() -> PackedStringArray:
 ## 编译期已经校验过一遍，但那是**作者的**编译器跑的，而 mod 产物是外部文件、
 ## 可以被手改。第三方产物不享有"编译期校验过"这个前提，所以这里必须再查一遍。
 ## 契约是唯一的信任根，而它在引擎这一侧。
+## L4 之后连字段类型 / 范围 / 枚举也一起查：自定义组件和内置组件同等对待。
 func validate_entities(incoming: Dictionary) -> Array[String]:
-	var problems: Array[String] = []
 	var comps: Dictionary = schema.get("components", {})
-	for cid in incoming:
-		var body: Dictionary = incoming[cid]
-		if typeof(body) != TYPE_DICTIONARY:
-			problems.append("`%s` 不是字典" % cid)
-			continue
-		var used: Dictionary = body.get("components", {})
-		for c in used:
-			if not comps.has(c):
-				problems.append("`%s` 用了契约里没有的组件 `%s`" % [cid, c])
-	return problems
+	return VALIDATOR.validate_entities(comps, incoming)
+
+
+## 把一个 mod 的 L4 扩展声明并进 schema。
+##
+## 先整份校验、再整份合并：中途失败会留下「组件进来了但系统没进来」这种
+## 半装状态，而它看起来一切正常。冲突（覆盖内置组件 / 优先级撞车 / 悬空引用）
+## 一律拒绝，不会因为后装的 mod 就把先装的悄悄改掉。
+func apply_extension(ext: Dictionary, mod_id: String) -> Array[String]:
+	var checked: Dictionary = VALIDATOR.validate_extension(schema, ext, mod_id)
+	var problems: Array[String] = checked["problems"]
+	if not problems.is_empty():
+		return problems
+	var comps: Dictionary = schema.get("components", {})
+	for cname in checked["components"]:
+		comps[cname] = checked["components"][cname]
+	var ext_section: Dictionary = schema.get("extensions", {})
+	var systems: Dictionary = ext_section.get("systems", {})
+	for sid in checked["systems"]:
+		systems[sid] = checked["systems"][sid]
+	ext_section["systems"] = systems
+	schema["extensions"] = ext_section
+	return []
+
+
+## 由 mod 声明的组件（origin != builtin）。探针靠它找到「这一轮到底扩展了什么」，
+## 不需要认识任何具体内容 id。
+func extension_component_names() -> PackedStringArray:
+	var out: Array[String] = []
+	var comps: Dictionary = schema.get("components", {})
+	for cname in comps:
+		if String((comps[cname] as Dictionary).get("origin", "builtin")) != "builtin":
+			out.append(String(cname))
+	out.sort()
+	return PackedStringArray(out)
+
+
+## 当前已合并的 mod 系统声明。调度器只认这张表，不认 mod 的名字。
+func extension_systems() -> Dictionary:
+	return (schema.get("extensions", {}) as Dictionary).get("systems", {})
 
 
 ## 把一个 mod 的内容并进来。冲突按"后到者覆盖"处理，被覆盖的 id 返回给调用方 ——

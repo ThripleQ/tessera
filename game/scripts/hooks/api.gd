@@ -147,6 +147,18 @@ func exists(handle: int) -> bool:
 	return b != null and is_instance_valid(b)
 
 
+## 当前活着的全部 handle，升序。给 L4 系统做确定性遍历：
+## 交给 mod 的仍然只是整数，拿不到节点，也不能反查节点树。
+func handles() -> Array[int]:
+	var out: Array[int] = []
+	for h in _bodies:
+		var b = _bodies.get(h, null)
+		if b != null and is_instance_valid(b):
+			out.append(int(h))
+	out.sort()
+	return out
+
+
 # ---------------------------------------------------------------- 读
 
 func pos(handle: int) -> Vector3:

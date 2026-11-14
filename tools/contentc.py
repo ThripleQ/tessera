@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 from contract.registry import (  # noqa: E402
     BRAINS,
     COMPONENTS,
+    EXTENSION_RULES,
     HOOKS,
     KINDS,
     MESHES,
@@ -43,8 +44,12 @@ from contract.registry import (  # noqa: E402
     PALETTES,
     SUPPORTED_API,
     TOP_FIELDS,
+    ComponentSpec,
     Field,
+    check_extension_order,
+    check_system_spec,
     check_value,
+    component_from_spec,
 )
 
 OPS = ("set", "mul", "add")
@@ -207,7 +212,8 @@ def resolve_one(
     return body
 
 
-def apply_patch(cid: str, body: dict, doc: Doc, errors: list[str]) -> None:
+def apply_patch(cid: str, body: dict, doc: Doc, errors: list[str],
+                specs: dict[str, ComponentSpec]) -> None:
     # `abstract` 不在 patch 能改的范围内。patch 的语义是"改一个已有东西的数值"，
     # 而 abstract 决定"这东西还能不能存在"—— 通过 patch 把一个具体内容变成模板，
     # 等于在玩家装了一个 mod 之后，世界里静默地少掉一整类东西。
@@ -227,7 +233,7 @@ def apply_patch(cid: str, body: dict, doc: Doc, errors: list[str]) -> None:
         if cname not in body.get("components", {}):
             errors.append(f"{rel(doc.path)}: 目标 `{cid}` 没有组件 `{cname}`，无法覆写")
             continue
-        spec = COMPONENTS.get(cname)
+        spec = specs.get(cname)
         if spec is None:
             errors.append(f"{rel(doc.path)}: 未注册的组件 `{cname}`")
             continue
@@ -277,12 +283,83 @@ def fspec_names(spec) -> list[str]:
     return sorted(spec.fields)
 
 
+def component_specs_from(extension_components: dict) -> dict[str, ComponentSpec]:
+    """把 L4 的组件声明变成校验器认得的 ComponentSpec。
+
+    只在这一次编译里生效，**不改 `contract.registry.COMPONENTS`**：
+    全局注册表是引擎内置能力的真相，mod 的声明属于某一次产物。
+    """
+    out: dict[str, ComponentSpec] = dict(COMPONENTS)
+    for cname, spec in extension_components.items():
+        fields: dict[str, Field] = {}
+        for fname, fd in spec["fields"].items():
+            enum = tuple(fd["enum"]) if fd.get("enum") else None
+            fields[fname] = Field(
+                fd["type"], fd["default"], fd.get("min"), fd.get("max"), enum,
+                str(fd.get("doc", "")),
+            )
+        out[cname] = ComponentSpec(cname, str(spec.get("doc", "")), fields)
+    return out
+
+
+def collect_extensions(
+    resolved: dict[str, dict], errors: list[str], origin: str
+) -> dict:
+    """收集 `component_spec` 与 `system`，并做跨条目的冲突检查。
+
+    先收组件再收系统：系统的 reads / writes 必须能引用同一次编译里
+    刚声明出来的新组件，否则「mod 自带新玩法」就还是只能读写内置 13 个。
+    """
+    components: dict[str, dict] = {}
+    component_names: set[str] = set(COMPONENTS)
+    for cid, body in resolved.items():
+        if body.get("kind") != "component_spec":
+            continue
+        src = body.get("_source", cid)
+        spec, problems = component_from_spec(body, origin)
+        for p in problems:
+            errors.append(f"{src}: {p}")
+        if spec is None:
+            continue
+        key = str(body["key"])
+        if key in components:
+            errors.append(f"{src}: 组件 `{key}` 重复声明")
+            continue
+        spec["id"] = cid
+        components[key] = spec
+        component_names.add(key)
+
+    systems: dict[str, dict] = {}
+    for cid, body in resolved.items():
+        if body.get("kind") != "system":
+            continue
+        src = body.get("_source", cid)
+        period = body.get("period", EXTENSION_RULES["period_default"])
+        if isinstance(period, int) and not isinstance(period, bool):
+            body["period"] = float(period)
+        for p in check_system_spec(cid, body, component_names):
+            errors.append(f"{src}: {p}")
+        systems[cid] = {
+            "id": cid,
+            "name": str(body.get("name", cid)),
+            "source": str(body.get("source", "")),
+            "priority": body.get("priority", 0),
+            "reads": list(body.get("reads", [])),
+            "writes": list(body.get("writes", [])),
+            "period": float(body.get("period", EXTENSION_RULES["period_default"])),
+        }
+    for p in check_extension_order(systems):
+        errors.append(p)
+    return {"components": components, "systems": systems}
+
+
 # --------------------------------------------------------------------------
 # 3. 校验
 # --------------------------------------------------------------------------
 
 
-def validate(cid: str, body: dict, errors: list[str]) -> None:
+def validate(cid: str, body: dict, errors: list[str],
+             specs: dict[str, ComponentSpec]) -> None:
     src = body.get("_source", cid)
     for req in KINDS[body["kind"]].require:
         if req not in body or body[req] in (None, ""):
@@ -297,9 +374,9 @@ def validate(cid: str, body: dict, errors: list[str]) -> None:
         return
 
     for cname, cval in comps.items():
-        spec = COMPONENTS.get(cname)
+        spec = specs.get(cname)
         if spec is None:
-            errors.append(f"{src}: `{cid}` 使用了未注册的组件 `{cname}`（已注册：{', '.join(sorted(COMPONENTS))}）")
+            errors.append(f"{src}: `{cid}` 使用了未注册的组件 `{cname}`（已注册：{', '.join(sorted(specs))}）")
             continue
         if not isinstance(cval, dict):
             errors.append(f"{src}: `{cid}.{cname}` 必须是表")
@@ -440,11 +517,19 @@ def check_scripts(
     seen_hooks: dict[str, str] = {}
 
     for cid, body in resolved.items():
-        if body.get("kind") != "script":
+        kind = body.get("kind")
+        if kind not in ("script", "system"):
             continue
         src = body.get("_source", cid)
         source = body.get("source")
-        events = body.get("events")
+
+        # 基础内容永远被信任。它一旦能带可执行代码，就等于有一条
+        # 不经过玩家授权的通道 —— L3 的 script 与 L4 的 system 都算。
+        if script_root is None:
+            errors.append(
+                f"{src}: 基础内容不许带可执行代码（kind=\"{kind}\"）；"
+                "脚本与系统只能来自 mod 目录（ADR 0008 / 0011）"
+            )
 
         if not isinstance(source, str) or not source.endswith(".gd"):
             errors.append(f"{src}: `source` 必须是 .gd 文件路径")
@@ -454,9 +539,16 @@ def check_scripts(
             errors.append(f"{src}: 找不到脚本 `{source}`（找的是 {path}）")
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+
+        if kind == "system":
+            if "func step(" not in text:
+                errors.append(f"{src}: `{source}` 里没有 `func step(ctx, api)`，系统调度器无法调用它")
+            continue
+
         if "func handle(" not in text:
             errors.append(f"{src}: `{source}` 里没有 `func handle(event, ctx, api)`，加载器无法调用它")
 
+        events = body.get("events")
         if not isinstance(events, list) or not events:
             errors.append(f"{src}: `events` 必须是非空数组（否则这个 mod 挂了也不会被调用）")
             continue
@@ -482,7 +574,8 @@ def check_scripts(
 # --------------------------------------------------------------------------
 
 
-def build_schema() -> dict:
+def build_schema(extension_components: dict | None = None,
+                 extension_systems: dict | None = None) -> dict:
     """把契约层导出成数据，跟内容包一起走。
 
     引擎侧靠它回答一个问题：「内容里用到的组件，我实现了几个？」
@@ -490,6 +583,7 @@ def build_schema() -> dict:
 
     这不是第二份真相：schema 永远由 contract/registry.py 生成，
     手改会被下一次 check.sh 覆盖。真相只有 registry.py 一处。
+    L4 的自定义组件也进同一张表，靠 `origin` 区分是谁声明的。
     """
     components: dict[str, dict] = {}
     for name in sorted(COMPONENTS):
@@ -504,7 +598,15 @@ def build_schema() -> dict:
                 "max": fd.max,
                 "enum": list(fd.enum) if fd.enum else None,
             }
-        components[name] = {"doc": spec.doc, "fields": fields}
+        components[name] = {"doc": spec.doc, "fields": fields, "origin": "builtin"}
+
+    for name in sorted(extension_components or {}):
+        spec = extension_components[name]
+        components[name] = {
+            "doc": str(spec.get("doc", "")),
+            "fields": spec["fields"],
+            "origin": str(spec.get("origin", "content")),
+        }
 
     return {
         "components": components,
@@ -523,6 +625,10 @@ def build_schema() -> dict:
                 "blocking": HOOKS[n].blocking,
             }
             for n in sorted(HOOKS)
+        },
+        "extensions": {
+            "rules": dict(EXTENSION_RULES),
+            "systems": dict(extension_systems or {}),
         },
     }
 
@@ -553,6 +659,12 @@ def build_pack(
     for cid in by_id:
         resolved[cid] = resolve_one(cid, by_id, cache, [], errors)
 
+    # L4 的组件声明必须在 patch / 字段校验之前收集好，否则
+    # `[components.<新组件>]` 与覆写它的 patch 都会被当成「未注册组件」。
+    origin = "content" if script_root is None else "mod"
+    extensions = collect_extensions(resolved, errors, origin)
+    specs = component_specs_from(extensions["components"])
+
     patches.sort(key=lambda d: (d.order, str(d.path)))
     for doc in patches:
         tgt = doc.raw.get("target")
@@ -563,11 +675,11 @@ def build_pack(
         if not matched:
             warnings.append(f"{rel(doc.path)}: target `{tgt}` 没有匹配到任何内容，这个 mod 是空操作")
         for cid in matched:
-            apply_patch(cid, resolved[cid], doc, errors)
+            apply_patch(cid, resolved[cid], doc, errors, specs)
             doc.hits.append(cid)
 
     for cid, body in resolved.items():
-        validate(cid, body, errors)
+        validate(cid, body, errors, specs)
 
     extended = {
         d.raw["extends"]
@@ -585,7 +697,8 @@ def build_pack(
         "api_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "sources": dirs,
-        "schema": build_schema(),
+        "schema": build_schema(extensions["components"], extensions["systems"]),
+        "extensions": extensions,
         "counts": counts,
         "entities": {cid: resolved[cid] for cid in sorted(resolved)},
         "warnings": warnings,
@@ -705,7 +818,26 @@ def build_mod(
         counts[body["kind"]] = counts.get(body["kind"], 0) + 1
     pack["counts"] = counts
 
-    script_ids = [cid for cid, b in changed.items() if b.get("kind") == "script"]
+    # 扩展产物也要按同一份 diff 裁剪：基线里已有的组件声明不该被每个 mod
+    # 重复带一份，否则运行时会把「谁声明了它」算错。
+    changed_ids = set(changed)
+    ext_components: dict[str, dict] = {}
+    for key, spec in pack["extensions"]["components"].items():
+        if spec.get("id") not in changed_ids:
+            continue
+        item = copy.deepcopy(spec)
+        item["origin"] = mid
+        ext_components[key] = item
+    ext_systems: dict[str, dict] = {
+        cid: spec for cid, spec in pack["extensions"]["systems"].items()
+        if cid in changed_ids
+    }
+    extensions = {"components": ext_components, "systems": ext_systems}
+
+    code_ids = [
+        cid for cid, b in changed.items()
+        if b.get("kind") in ("script", "system")
+    ]
     scripts_dir = mod_dir / "scripts"
     has_gd = scripts_dir.is_dir() and any(scripts_dir.rglob("*.gd"))
 
@@ -713,18 +845,19 @@ def build_mod(
     # 作者完全可以把带脚本的 mod 写成 level="data" 来绕过玩家授权 ——
     # 如果引擎相信声明，那道授权闸门就是纸做的。所以这里算一遍真实的，
     # 引擎侧还会再独立算一遍（不信任产物，产物也可能被手改）。
-    actual = "script" if (script_ids or has_gd) else "data"
+    # L4 的 `kind="system"` 和 L3 的 `kind="script"` 一样是代码。
+    actual = "script" if (code_ids or has_gd) else "data"
     if declared == "data" and actual == "script":
         warnings.append(
-            f"{rel(manifest)}: 声明 data 级但带了脚本，按 script 级处理"
+            f"{rel(manifest)}: 声明 data 级但带了脚本或系统，按 script 级处理"
             "（否则声明就成了绕过授权的办法）"
         )
     if declared == "script" and actual == "data":
-        warnings.append(f"{rel(manifest)}: 声明 script 级但没有脚本，按 data 级处理")
-    if has_gd and not script_ids:
+        warnings.append(f"{rel(manifest)}: 声明 script 级但没有脚本/系统，按 data 级处理")
+    if has_gd and not code_ids:
         warnings.append(
-            f"{rel(mod_dir)}: scripts/ 下有 .gd，但内容里没有任何 kind=\"script\" 绑定 —— "
-            "这些脚本永远不会被加载"
+            f"{rel(mod_dir)}: scripts/ 下有 .gd，但内容里没有任何 "
+            "kind=\"script\" / kind=\"system\" 绑定 —— 这些脚本永远不会被加载"
         )
 
     if errors:
@@ -743,6 +876,7 @@ def build_mod(
         },
         "counts": pack["counts"],
         "entities": pack["entities"],
+        "extensions": extensions,
         "warnings": pack["warnings"],
     }
     return product, errors, warnings
@@ -878,6 +1012,77 @@ entries = [
 ]
 """,
     },
+    "自定义组件合法": {
+        "spec.toml": """
+api_version = 1
+kind = "component_spec"
+id = "t/pulse"
+name = "脉动"
+key = "pulse"
+fields = [
+  { name = "charge", type = "float", default = 0.0, min = 0.0, max = 1.0 },
+  { name = "phase", type = "str", default = "hot", enum = ["hot", "cool"] },
+]
+""",
+    },
+    "自定义组件字段默认值类型错": {
+        "spec.toml": """
+api_version = 1
+kind = "component_spec"
+id = "t/pulse"
+name = "脉动"
+key = "pulse"
+fields = [
+  { name = "charge", type = "float", default = "零", min = 0.0, max = 1.0 },
+]
+""",
+    },
+    "系统引用未声明组件": {
+        "system.toml": """
+api_version = 1
+kind = "system"
+id = "t/system"
+name = "坏系统"
+source = "scripts/nope.gd"
+priority = 120
+reads = ["t/nope"]
+writes = []
+""",
+    },
+    "系统优先级重复": {
+        "one.toml": """
+api_version = 1
+kind = "system"
+id = "t/one"
+name = "系统一"
+source = "scripts/one.gd"
+priority = 120
+reads = ["move"]
+writes = []
+""",
+        "two.toml": """
+api_version = 1
+kind = "system"
+id = "t/two"
+name = "系统二"
+source = "scripts/two.gd"
+priority = 120
+reads = ["move"]
+writes = []
+""",
+    },
+    "基础内容不许带系统": {
+        "system.toml": """
+api_version = 1
+kind = "system"
+id = "t/system"
+name = "基础系统"
+source = "scripts/nope.gd"
+priority = 120
+reads = ["move"]
+writes = []
+""",
+    },
 }
 
 ## 每个场景"必须出现"的一段错误文本。空 = 必须编译通过。
@@ -889,6 +1094,11 @@ SELFTEST_EXPECT: dict[str, str] = {
     "patch 不能改 abstract": "patch 不能改 `abstract`",
     "掉落表悬空引用": "指向不存在的 id `t/nope`",
     "掉落条目悬空": "指向不存在的 id `t/nothing`",
+    "自定义组件合法": "",
+    "自定义组件字段默认值类型错": "default 期望数字",
+    "系统引用未声明组件": "未声明的组件 `t/nope`",
+    "系统优先级重复": "priority 都是 120",
+    "基础内容不许带系统": "基础内容不许带可执行代码",
 }
 
 

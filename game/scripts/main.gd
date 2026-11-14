@@ -36,8 +36,9 @@ var api
 var mods: Dictionary = {}
 ## 已合并进来的 mod 单元，交给 loader 找脚本。
 var mod_units: Array[Dictionary] = []
-## 基础内容里带 kind="script" 的实体数。必须为 0：基础内容永远被信任，
-## 它一旦能带脚本，就等于有一条通道绕过了 mod 的授权闸门。
+## 基础内容里带可执行代码的实体数（kind="script" / kind="system"）。
+## 必须为 0：基础内容永远被信任，它一旦能带代码，就等于有一条通道
+## 绕过 mod 的授权闸门。
 var base_scripts := 0
 ## 被授权闸门挡下的 mod 数。自检里必须为 0 —— 否则"行为开放"这条通道
 ## 在这一轮里根本没被验证到，而验收照样是绿的。
@@ -61,7 +62,9 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	print(pack.summary())
-	base_scripts = pack.ids_of_kind("script").size()
+	# L3 的 script 与 L4 的 system 都是可执行代码。基础内容永远被信任，
+	# 它一旦能带任一种，就等于有一条绕过 mod 授权闸门的通道。
+	base_scripts = pack.ids_of_kind("script").size() + pack.ids_of_kind("system").size()
 
 	# mod 必须合并进 pack 之后再排世界，否则新内容根本不会出现在世界里。
 	_mount_mods(args)
@@ -83,6 +86,7 @@ func _ready() -> void:
 		print("mod 载入：%s" % line)
 	for e in mods["errors"]:
 		printerr("mod 加载失败：%s" % e)
+	print("mod 系统：编译 %d 个（交给系统调度器）" % (mods.get("systems", []) as Array).size())
 	print(bus.summary())
 
 	if selftest:
@@ -110,13 +114,17 @@ func _mount_mods(args: PackedStringArray) -> void:
 		print("mod 提示：%s" % w)
 
 	for cand in resolved["blocked"]:
-		printerr("mod `%s` 未授权：它带脚本，而 Godot 没有 GDScript 沙箱（ADR 0003）。"
+		printerr("mod `%s` 未授权：它带可执行代码，而 Godot 没有 GDScript 沙箱（ADR 0003）。"
 			% cand["id"])
 		printerr("  信任它就跑一次： ./run.sh --trust=%s" % cand["id"])
 
 	var units: Array[Dictionary] = []
 	for cand in resolved["enabled"]:
-		var problems: Array[String] = pack.validate_entities(cand["entities"])
+		# 扩展声明必须先并进 schema，再校验内容 —— 否则 mod 自带的
+		# `[components.<新组件>]` 会被当成「契约里没有的组件」。
+		var ext: Dictionary = cand.get("extensions", {})
+		var problems: Array[String] = pack.apply_extension(ext, String(cand["id"]))
+		problems.append_array(pack.validate_entities(cand["entities"]))
 		if not problems.is_empty():
 			for p in problems:
 				printerr("mod `%s` 被拒绝：%s" % [cand["id"], p])
@@ -124,6 +132,10 @@ func _mount_mods(args: PackedStringArray) -> void:
 		var merged: Dictionary = pack.merge_entities(cand["entities"])
 		var overwritten: Array = merged["overwritten"]
 		var note := "%s[%s] %d 条" % [cand["id"], cand["level"], merged["merged"]]
+		var ext_comps: Dictionary = ext.get("components", {})
+		var ext_systems: Dictionary = ext.get("systems", {})
+		if not ext_comps.is_empty() or not ext_systems.is_empty():
+			note += "，扩展 %d 组件 / %d 系统" % [ext_comps.size(), ext_systems.size()]
 		if not overwritten.is_empty():
 			note += "，覆写 %d 条（%s）" % [overwritten.size(), ", ".join(overwritten)]
 		print("mod 合并：%s" % note)
@@ -203,7 +215,7 @@ func _setup_scene() -> void:
 	# 系统层在世界和玩家都就位之后才能跑：它要读 world.bodies，
 	# 而那个数组在 realize 之后才有人。晚一帧启动没关系，缺了它全盘皆输。
 	_systems = SYSTEMS.new()
-	_systems.setup(_world, _player, api, bus, pack)
+	_systems.setup(_world, _player, api, bus, pack, mods.get("systems", []))
 
 	# 菜单要在玩家之后建：它要接管玩家输入。
 	var menu = SPAWN_MENU.new()

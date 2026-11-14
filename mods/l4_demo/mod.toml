@@ -1,0 +1,13 @@
+[mod]
+id = "l4_demo"
+name = "L4 扩展示例：脉动箱"
+version = "1.0.0"
+api_version = 1
+author = "tessera 官方示例"
+level = "script"
+description = """
+不改引擎，只用一个文件夹证明三件以前做不到的事：
+声明一个新组件、把新组件挂到新内容上、写一条持续参与循环的规则。
+
+这个 mod 的内容量刻意只有一件 —— 它是通道的验收样品，不是玩法内容。
+"""

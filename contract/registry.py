@@ -17,9 +17,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Iterable
 
 SUPPORTED_API = {1}
+
+## L4 扩展的形状约束。随 schema 导出，编译器与引擎共用同一组数字，
+## 不在两个地方各写一个「100」或「16」。改这里之前先看 ADR 0011。
+FIELD_TYPES = ("int", "float", "bool", "str", "list", "dict")
+EXTENSION_RULES: dict[str, Any] = {
+    "component_key": r"^[a-z][a-z0-9_]*$",
+    "field_name": r"^[a-z][a-z0-9_]*$",
+    "max_fields": 16,
+    "system_priority_min": 100,
+    "system_priority_max": 999,
+    "period_min": 0.05,
+    "period_max": 5.0,
+    "period_default": 0.25,
+    "max_systems": 16,
+}
 
 ## mod 的两个级别。引擎真的按它分流，不是文档里的一句话。
 ##
@@ -51,6 +67,12 @@ TOP_FIELDS: dict[str, str] = {
     "source": "str",   # script 用：源码在哪
     "events": "list",  # script 用：挂哪些钩子
     "entries": "list",  # loot_table 用：一组 {id, chance}
+    "key": "str",       # component_spec 用：新组件叫什么
+    "fields": "list",   # component_spec 用：字段定义列表
+    "priority": "int",  # system 用：越小越先跑
+    "reads": "list",    # system 用：允许读哪些组件
+    "writes": "list",   # system 用：允许写哪些组件
+    "period": "float",  # system 用：固定节拍秒数
 }
 
 ## `abstract = true` 的含义：**这条内容只能被 extends，不能单独存在。**
@@ -254,6 +276,148 @@ def check_value(spec: Field, value: Any) -> str | None:
     return None
 
 
+def component_from_spec(body: dict, origin: str = "mod") -> tuple[dict | None, list[str]]:
+    """把 `kind="component_spec"` 的内容变成 schema 里的一段组件声明。
+
+    L4 的组件不是「随便往字典里塞任意键」：类型、默认值、范围、枚举都要在这里
+    过一遍。否则一个拼错的字段名或字符串型的数字会静默生效，和内置组件当年
+    踩过的坑一模一样（ADR 0011）。
+    """
+    errors: list[str] = []
+    key = body.get("key")
+    if not isinstance(key, str) or not re.match(EXTENSION_RULES["component_key"], key):
+        errors.append(f"组件 key `{key!r}` 不合法（小写字母开头，只允许 a-z 0-9 _）")
+        return None, errors
+    if key in COMPONENTS:
+        errors.append(f"组件 `{key}` 与契约内置组件重名；mod 只能加新名字，不能改内置语义")
+
+    raw_fields = body.get("fields")
+    if not isinstance(raw_fields, list) or not raw_fields:
+        errors.append(f"组件 `{key}` 的 fields 必须是非空数组")
+        return None, errors
+    if len(raw_fields) > int(EXTENSION_RULES["max_fields"]):
+        errors.append(f"组件 `{key}` 有 {len(raw_fields)} 个字段，超过上限 {EXTENSION_RULES['max_fields']}")
+        return None, errors
+
+    fields: dict[str, dict] = {}
+    for i, item in enumerate(raw_fields):
+        where = f"组件 `{key}` 的第 {i + 1} 个字段"
+        if not isinstance(item, dict):
+            errors.append(f"{where} 必须是一张表")
+            continue
+        fname = item.get("name")
+        if not isinstance(fname, str) or not re.match(EXTENSION_RULES["field_name"], fname):
+            errors.append(f"{where} 的 name `{fname!r}` 不合法")
+            continue
+        if fname in fields:
+            errors.append(f"组件 `{key}` 的字段 `{fname}` 重复")
+            continue
+        ftype = item.get("type")
+        if ftype not in FIELD_TYPES:
+            errors.append(f"{where} 的 type `{ftype!r}` 不合法（可用：{', '.join(FIELD_TYPES)}）")
+            continue
+        if "default" not in item:
+            errors.append(f"{where} 缺 default；运行时不该猜它从几开始")
+            continue
+        default = item["default"]
+        lo = item.get("min")
+        hi = item.get("max")
+        enum = item.get("enum")
+        if lo is not None and (not isinstance(lo, (int, float)) or isinstance(lo, bool) or ftype not in ("int", "float")):
+            errors.append(f"{where} 的 min 只能是数字，且只给数值字段用")
+            continue
+        if hi is not None and (not isinstance(hi, (int, float)) or isinstance(hi, bool) or ftype not in ("int", "float")):
+            errors.append(f"{where} 的 max 只能是数字，且只给数值字段用")
+            continue
+        if lo is not None and hi is not None and lo > hi:
+            errors.append(f"{where} 的 min 比 max 还大")
+            continue
+        if enum is not None:
+            if ftype != "str" or not isinstance(enum, list) or not enum or not all(isinstance(x, str) for x in enum):
+                errors.append(f"{where} 的 enum 只能是非空的字符串数组，且只给 str 字段用")
+                continue
+            enum = tuple(enum)
+        fspec = Field(ftype, default, lo, hi, enum, str(item.get("doc", "")))
+        problem = check_value(fspec, default)
+        if problem:
+            errors.append(f"{where} 的 default {problem}")
+            continue
+        fields[fname] = {
+            "type": ftype,
+            "default": default,
+            "min": lo,
+            "max": hi,
+            "enum": list(enum) if enum else None,
+            "doc": fspec.doc,
+        }
+
+    if errors:
+        return None, errors
+    return {
+        "doc": str(body.get("doc", "")),
+        "fields": fields,
+        "origin": origin,
+    }, []
+
+
+def check_system_spec(cid: str, body: dict, component_names: set[str]) -> list[str]:
+    """检查一条 `kind="system"` 声明。返回空列表 = 合法。"""
+    errors: list[str] = []
+    rules = EXTENSION_RULES
+    source = body.get("source")
+    if not isinstance(source, str) or not source.endswith(".gd"):
+        errors.append(f"系统 `{cid}` 的 source 必须是 .gd 文件路径")
+    priority = body.get("priority")
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        errors.append(f"系统 `{cid}` 的 priority 必须是整数")
+    elif not (int(rules["system_priority_min"]) <= priority <= int(rules["system_priority_max"])):
+        errors.append(
+            f"系统 `{cid}` 的 priority={priority} 越界"
+            f"（mod 系统只允许 {rules['system_priority_min']}~{rules['system_priority_max']}，"
+            "100 以前留给引擎自带系统）"
+        )
+    period = body.get("period", rules["period_default"])
+    if isinstance(period, bool) or not isinstance(period, (int, float)):
+        errors.append(f"系统 `{cid}` 的 period 必须是秒数")
+    elif not (float(rules["period_min"]) <= float(period) <= float(rules["period_max"])):
+        errors.append(
+            f"系统 `{cid}` 的 period={period} 越界"
+            f"（允许 {rules['period_min']}~{rules['period_max']} 秒）"
+        )
+
+    reads = body.get("reads")
+    writes = body.get("writes")
+    for label, names in (("reads", reads), ("writes", writes)):
+        if not isinstance(names, list):
+            errors.append(f"系统 `{cid}` 的 {label} 必须是数组")
+            continue
+        for c in names:
+            if not isinstance(c, str):
+                errors.append(f"系统 `{cid}` 的 {label} 里出现非字符串 {c!r}")
+            elif c not in component_names:
+                errors.append(f"系统 `{cid}` 的 {label} 引用了未声明的组件 `{c}`")
+    if isinstance(reads, list) and isinstance(writes, list) and not (reads or writes):
+        errors.append(f"系统 `{cid}` 既不读也不写，引擎不知道该把哪些实体交给它")
+    return errors
+
+
+def check_extension_order(systems: dict[str, dict]) -> list[str]:
+    """多个 mod 系统之间的冲突。优先级必须唯一，否则顺序靠字典遍历决定。"""
+    errors: list[str] = []
+    if len(systems) > int(EXTENSION_RULES["max_systems"]):
+        errors.append(f"系统数 {len(systems)} 超过上限 {EXTENSION_RULES['max_systems']}")
+    seen: dict[int, str] = {}
+    for cid, body in systems.items():
+        p = body.get("priority")
+        if not isinstance(p, int) or isinstance(p, bool):
+            continue
+        if p in seen:
+            errors.append(f"系统 `{cid}` 与 `{seen[p]}` 的 priority 都是 {p}；顺序不能靠猜")
+        else:
+            seen[p] = cid
+    return errors
+
+
 # --------------------------------------------------------------------------
 # 游戏组件声明。加一个组件 = 在这里加一段。
 # --------------------------------------------------------------------------
@@ -435,4 +599,16 @@ kind(
     "行为 mod。声明源码位置和它要挂的事件，引擎运行时编译并绑定。"
     "events 是**权限清单**：没写进这里的事件，引擎不会转给它。",
     require=("name", "source", "events"),
+)
+kind(
+    "component_spec",
+    "L4 扩展：声明一个新组件。fields 是带类型 / 默认值 / 范围的字段定义；"
+    "key 就是之后 `[components.<key>]` 里用的名字。",
+    require=("name", "key", "fields"),
+)
+kind(
+    "system",
+    "L4 扩展：声明一条固定节拍规则。source 指向自己的 .gd，"
+    "reads / writes 是权限清单，priority 决定系统之间的顺序。",
+    require=("name", "source", "reads", "writes", "priority"),
 )

@@ -100,6 +100,7 @@ static func _read_product(path: String, dir_name: String, errors: Array[String],
 		"dir": path,
 		"meta": meta,
 		"entities": entities,
+		"extensions": parsed.get("extensions", {}),
 		"counts": parsed.get("counts", {}),
 		"level": level,
 		"declared_level": declared,
@@ -107,8 +108,11 @@ static func _read_product(path: String, dir_name: String, errors: Array[String],
 
 
 static func _has_scripts(entities: Dictionary) -> bool:
+	# L3 的事件脚本与 L4 的系统脚本都是可执行代码。少算一种，
+	# 就等于给「标成 data 的 mod 偷偷跑规则」留了一道门（ADR 0011）。
 	for cid in entities:
-		if String((entities[cid] as Dictionary).get("kind", "")) == "script":
+		var kind := String((entities[cid] as Dictionary).get("kind", ""))
+		if kind == "script" or kind == "system":
 			return true
 	return false
 
