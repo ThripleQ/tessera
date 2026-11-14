@@ -46,12 +46,33 @@ static func run(app) -> bool:
 		printerr("  验收里应该显式授权：./check.sh 会给 --trust。见 docs/decisions/0008")
 		ok = false
 
-	# 基础内容不许带脚本：基础内容永远被信任（它在仓库里、随引擎发布），
-	# 一旦它能带脚本，就存在一条绕过授权闸门的通道 —— 而且是最好用的那条。
+	# 基础内容不许带代码：基础内容永远被信任（它在仓库里、随引擎发布），
+	# 一旦它能带 script / system，就存在一条绕过授权闸门的通道 —— 而且是最好用的那条。
 	if app.base_scripts > 0:
-		printerr("自检失败：基础内容里有 %d 条 kind=\"script\"。脚本必须来自 mod 目录"
+		printerr("自检失败：基础内容里有 %d 条 kind=\"script\" / \"system\"。代码必须来自 mod 目录"
 			% app.base_scripts)
 		ok = false
+
+	# L4 必须真的被这一轮验到：至少有一个 mod 声明的组件与系统，
+	# 而且每个声明出来的系统都编译出了实例。只加载事件脚本就宣布「开放」，
+	# 是这批检查最容易出现的一种假绿。
+	var ext_components: PackedStringArray = app.pack.extension_component_names()
+	var ext_systems: Dictionary = app.pack.extension_systems()
+	var loaded_systems: Array = app.mods.get("systems", [])
+	if ext_components.is_empty():
+		printerr("自检失败：没有任何 mod 声明的自定义组件，L4 组件通道没被验证到")
+		ok = false
+	if ext_systems.is_empty():
+		printerr("自检失败：没有任何 mod 声明的系统，L4 规则通道没被验证到")
+		ok = false
+	var compiled: Dictionary = {}
+	for s in loaded_systems:
+		if s is Dictionary:
+			compiled[String((s as Dictionary).get("id", ""))] = true
+	for sid in ext_systems:
+		if not compiled.has(String(sid)):
+			printerr("自检失败：系统 `%s` 有声明但没有编译出实例" % String(sid))
+			ok = false
 
 	# 边界校验：内容用到的每个组件，契约里必须声明过。
 	# 编译期已经查过一遍，这里再查是防"旧 pack 配新引擎"这类错配 ——
@@ -120,8 +141,9 @@ static func run(app) -> bool:
 		% [plan.dynamic_count(), plan.solid_static_count(), plan.rooms.size()])
 	print("可生成：刚体 %d 种 / 固定 %d 种（清单来自内容，菜单里没有一行硬编码）"
 		% [rigid_placeable, static_placeable])
-	print("行为：mod %d 个 / 脚本 %d 个 / 挂载 %d 处 / 契约钩子 %d 个"
-		% [app.mod_units.size(), app.mods.get("files", 0), app.bus.handler_count(), declared.size()])
+	print("行为：mod %d 个 / 代码 %d 个 / mod 系统 %d 个 / 自定义组件 %d 个 / 挂载 %d 处 / 契约钩子 %d 个"
+		% [app.mod_units.size(), app.mods.get("files", 0), loaded_systems.size(),
+			ext_components.size(), app.bus.handler_count(), declared.size()])
 	if ok:
 		print("自检通过")
 	return ok
