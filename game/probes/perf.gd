@@ -67,11 +67,12 @@ func _report() -> void:
 		instances += chunk.instance_count()
 		tris += chunk.triangle_count()
 		batches += chunk.batch_count()
-	# 刚体的三角形不在块的合批里，得单独数 —— 少了这一段，
+	# 刚体的实例和三角形都不在块的合批里，得单独数 —— 少了这一段，
 	# 负载行会比自检少一截，两份数字对不上就没法互相印证了。
 	for rb in world.bodies:
 		if not is_instance_valid(rb):
 			continue
+		instances += 1
 		var cid := String(rb.get_meta("content_id", ""))
 		var mesh_id := String(pack.entities.get(cid, {}).get("components", {})
 			.get("model", {}).get("mesh", ""))

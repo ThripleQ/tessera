@@ -23,6 +23,26 @@ var _static_saved := Vector3.ZERO
 var _static_id := ""
 var _stack_id := ""
 var _stack_n := 0
+## 存档那一刻的刚体数。断言用它而不是一个写死的数字 ——
+## 内容一变（比如怪物从"钉住的障碍"改成刚体），绝对计数就红了，
+## 而那不是存档坏了。真正要验的是"读档前后一样多"。
+var _n_saved := 0
+
+
+## 挑一个**没有生命**的刚体当推箱子的目标。
+##
+## 为什么不直接用 bodies[0]：现在怪也是刚体了，而系统会让它走、会让它死。
+## 拿一只怪当"位置要精确复原"的目标，等于在测存档的同时也测了 AI 的行为 ——
+## 那不是这条探针该验的事，失败了也不知道该怪谁。
+## 挑选依据是**数据**（有没有 health 组件），不是名字（铁律 2）。
+func _pick_target() -> RigidBody3D:
+	for rb in _main._world.bodies:
+		if not is_instance_valid(rb):
+			continue
+		var comps: Dictionary = _main.pack.components_of(String(rb.get_meta("content_id", "")))
+		if not comps.has("health"):
+			return rb
+	return _main._world.bodies[0]
 
 
 func _initialize() -> void:
@@ -76,13 +96,14 @@ func _process(_delta: float) -> bool:
 			% [_main._player.bag().describe(), _main._player.bag().total()])
 
 	if _f == 90:
-		_target = _main._world.bodies[0]
+		_target = _pick_target()
 		_saved_id = String(_target.get_meta("content_id"))
 		print("SAVE 目标 %s 起始 %s" % [_saved_id, _target.global_position])
 		_target.apply_central_impulse(Vector3(22, 7, 0))
 
 	if _f == 150:
 		_saved = _target.global_position
+		_n_saved = _main._world.bodies.size()
 		print("SAVE 推动后 %s" % _saved)
 		_main._save_now(false)
 		# 再推一次，制造"存档之后世界又变了"的状态。
@@ -97,9 +118,22 @@ func _process(_delta: float) -> bool:
 		_main._resume()
 
 	if _f == 212:
-		var back: Vector3 = _main._world.bodies[0].global_position
-		var diff := back.distance_to(_saved)
-		print("SAVE 读档后 %s（与存档差 %.3f 米）" % [back, diff])
+		# 回位差不看"第 0 个"，而是**在同类里找离存档位置最近的那个**。
+		#
+		# 原来直接读 bodies[0]，因为那时候 14 个刚体全是木箱、顺序稳定。
+		# 怪变成刚体之后顺序就不是原来那个了 —— 读档后的 bodies[0] 可能是只怪，
+		# 于是"位置差 32 米"这个假失败出现过一次，而存档其实是好的。
+		# 断言要问的是"东西回没回到它该在的地方"，不是"数组的第一个是谁"。
+		var back := 999.0
+		var found := 0
+		for rb in _main._world.bodies:
+			if not is_instance_valid(rb):
+				continue
+			if String(rb.get_meta("content_id", "")) != _saved_id:
+				continue
+			found += 1
+			back = minf(back, rb.global_position.distance_to(_saved))
+		print("SAVE 读档后同类 %d 个，最近回位差 %.3f 米" % [found, back])
 		print("SAVE 刚体数 %d / 静态物 %d"
 			% [_main._world.bodies.size(), _main._world.props.size()])
 		print("SAVE 玩家位置 %s" % _main._player.global_position)
@@ -112,10 +146,11 @@ func _process(_delta: float) -> bool:
 		print("SAVE 固定物回位差 %.3f 米" % static_diff)
 		print("SAVE 读档后背包：%s" % _main._player.bag().describe())
 
-		# 四件事全对才算通过：位置回来了、数量没变、玩家也回来了、固定物也在。
-		# 第五件：背包也在 —— 它不在世界里，只能从存档里回来。
-		var count_ok: bool = _main._world.bodies.size() == 14
-		var pos_ok := diff < 0.15
+		# 五件事全对才算通过：位置回来了、数量没变、玩家也回来了、固定物也在、背包也在。
+		# 数量用**存档那一刻**的数字当基准，不用写死的常数 ——
+		# 内容一变绝对计数就红，而那不是存档坏了。
+		var count_ok: bool = _main._world.bodies.size() == _n_saved
+		var pos_ok := back < 0.15
 		var player_ok: bool = _main._player.global_position.distance_to(Vector3(500, 50, 500)) > 1.0
 		var static_ok: bool = _main._world.props.size() == 1 and static_diff < 0.05
 		var bag_ok: bool = _main._player.bag().count(_static_id) == 1

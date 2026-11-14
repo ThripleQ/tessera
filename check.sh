@@ -33,7 +33,7 @@ no_engine_errors() {   # $1=输出  $2=步骤名
 # 而且错误只是 `No such file or directory`，看起来像环境问题。
 mkdir -p build
 
-step "1/8 编译基础内容（解析 → 继承 → 校验 → 产物）"
+step "1/9 编译基础内容（解析 → 继承 → 校验 → 产物）"
 # 先验证编译器本身没退化成"永远接受"，再编译真内容。
 # 一个从来没拒绝过东西的校验器，和不存在没有区别 —— 而且它还是绿的。
 if out=$(python3 tools/contentc.py --selftest 2>&1); then
@@ -45,7 +45,7 @@ fi
 python3 tools/contentc.py --content content \
     --out build/content.pack.json --bin build/content.pack.bin --report || fail=1
 
-step "2/8 编译每个 mod（各自独立产物）"
+step "2/9 编译每个 mod（各自独立产物）"
 # mod 是可独立发布的单元，所以它有自己的一步编译。这里不合并成一个包：
 # 合并是运行时的事（按授权顺序叠加），编译期合并会让"谁覆盖了谁"变得不可见。
 for d in mods/*/; do
@@ -53,7 +53,7 @@ for d in mods/*/; do
     python3 tools/contentc.py --mod "$d" --base content || fail=1
 done
 
-step "3/8 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
+step "3/9 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
 # 先验证检查器本身没退化成"永远通过"，再跑真正的检查。
 if python3 tools/lint_arch.py --selftest > build/lint_selftest.log 2>&1; then
     echo "检查器自测：通过（R1-R7 每条都能抓到违规）"
@@ -63,7 +63,7 @@ else
 fi
 python3 tools/lint_arch.py || fail=1
 
-step "4/8 同步内容包到 Godot 工程"
+step "4/9 同步内容包到 Godot 工程"
 cp build/content.pack.json game/content.pack.json || fail=1
 
 # 行为 mod 的源码是运行时从磁盘编译的，根目录得显式给 —— 否则 CI 里找不到文件，
@@ -78,7 +78,7 @@ if [ ! -x "$GODOT" ]; then
     exit 1
 fi
 
-step "5/8 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
+step "5/9 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
 # --trust=all：验收必须真的跑到脚本通道。不授权的话带脚本的 mod 会被
 # 授权闸门挡住，自检发现"一个脚本都没加载"就判失败 —— 那种绿毫无意义。
 #
@@ -92,7 +92,26 @@ if ! echo "$out" | grep -q '自检通过'; then
     fail=1
 fi
 
-step "6/8 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
+step "6/9 系统层（怪会动 → 会死 → 会掉）"
+# `move` / `ai` / `health` / `loot` 在此之前是死数据：契约声明了、内容填了、
+# 引擎一行都没读。菜单里的"骨行者"放下去是个雕像。
+# 四条断言各守各的：是刚体（能抓能扔）、会动（系统写了速度）、
+# 会死（血扣光要离开世界）、会掉（死了要有东西）。
+#
+# 会动那条验的是**速度**不是位移 —— 无头下几百 fps，几十帧的位移小到测不准，
+# 而"系统有没有把意图写进物理"这件事本身是确定的。
+# 掉落那条把概率推到 1.0：概率只是一次 randf 比较，没有可测的逻辑，
+# 而"靠运气的断言"会天天翻脸。
+out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/actors.gd \
+    -- --fresh --trust=all 2>&1)
+echo "$out" | grep -E '^(ACTOR)'
+no_engine_errors "$out" "系统层" || fail=1
+if ! echo "$out" | grep -q 'ACTOR RESULT OK'; then
+    echo "系统层未通过"
+    fail=1
+fi
+
+step "7/9 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
 # 这一项必须真跑。自检只走到 Plan 层，不实例化玩家、不跑物理，
 # 所以坐标编码、刚体重建、handle 作废全在它的覆盖之外 ——
 # 而这类代码的错法是"看起来存了，读回来差一点"，只有对比数字能发现。
@@ -107,7 +126,7 @@ if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物
     fail=1
 fi
 
-step "7/8 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
+step "8/9 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
 # 菜单是纯运行时 UI，自检一个节点都不建。它坏起来很安静：
 # "能打开但点了没反应"、"关掉之后操作还卡着"，两种都不报错。
 # 收 / 放回 / 堆叠也在这里验：预算归还、库存扣减、堆叠上限、
@@ -125,7 +144,7 @@ if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     fail=1
 fi
 
-step "8/8 剔除（逐件判过）与帧时基线（不设断言）"
+step "9/9 剔除（逐件判过）与帧时基线（不设断言）"
 # 剔除坏起来不报错：该剔的没剔只是帧时慢慢涨，剔多了玩家只看到世界在闪。
 # 所以它必须有断言 —— 而且要测两条**不同**的路：
 # 距离（远处那件）和视锥（侧面那件）。只测远处的话，视锥写坏也发现不了，
@@ -159,4 +178,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\033[31m验收失败\033[0m\n'
     exit 1
 fi
-printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、存档能往返、菜单能生成、剔除判得对、引擎无报错、帧时有基线\n'
+printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、怪会动会死会掉、存档能往返、菜单能生成、剔除判得对、引擎无报错、帧时有基线\n'
