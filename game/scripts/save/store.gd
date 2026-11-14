@@ -3,9 +3,9 @@ extends RefCounted
 ## 存档：只存**玩家改动过的东西**，不存世界本身。
 ##
 ## 世界是内容（TOML）决定的，重跑一次就有；存档要保住的是玩家的动作 —— 
-## 箱子被推到哪里、玩家站在哪、mod 造出来什么、他自己摆下了什么。所以这里没有房间、
-## 没有地面、没有房间自带的静态障碍：那些是内容的形状，改了内容就该跟着变，
-## 不该被旧存档钉住。
+## 箱子被推到哪里、玩家站在哪、mod 造出来什么、他自己摆下了什么、背包里收着什么。
+## 所以这里没有房间、没有地面、没有房间自带的静态障碍：那些是内容的形状，
+## 改了内容就该跟着变，不该被旧存档钉住。
 ##
 ## 这条分界的关键在"谁放的"：房间里的柱子和玩家放的柱子长得一样、数据也一样，
 ## 但它们归属不同 —— 前者是内容的形状，后者是玩家的动作。
@@ -19,11 +19,17 @@ extends RefCounted
 
 const DIR := "user://saves"
 const SLOT := "slot0.json"
-## 2：加了 props（玩家摆下的静态物）。1 的存档照样能读 ——
+## 3：加了 bag（背包：收进去的东西）。
+##
+## 为什么背包必须进存档：它装的东西**不在世界里**，所以世界那份记录
+## （bodies / props）永远不会提到它们。不存的话，玩家关一次窗口，
+## 捡的东西就人间蒸发了 —— 而他把东西收进背包，正是为了"先放着"。
+##
+## 2 加了 props（玩家摆下的静态物）。1 的存档照样能读 ——
 ## 拒绝一个只少了一个列表的旧存档，对玩家来说是"我的进度没了"，
 ## 而那种损失换来的只是我们少写三行迁移代码。
-const VERSION := 2
-const READABLE := [1, 2]
+const VERSION := 3
+const READABLE := [1, 2, 3]
 
 
 ## 存档路径。允许环境变量覆盖，只有一个用途：**让验收不去动玩家真正的存档**。
@@ -81,6 +87,11 @@ static func collect(world, player) -> Dictionary:
 		})
 
 	var pose: Dictionary = player.pose()
+	# 背包：世界里没有它们，所以只能从玩家身上抄。
+	# 这里不复制件数以外的任何信息 —— 背包里的东西没有位置，那是它的定义。
+	var bag_rows: Array = []
+	if player.bag() != null:
+		bag_rows = player.bag().to_save()
 	return {
 		"version": VERSION,
 		"saved_at": Time.get_datetime_string_from_system(true),
@@ -91,6 +102,7 @@ static func collect(world, player) -> Dictionary:
 		},
 		"bodies": bodies,
 		"props": props,
+		"bag": bag_rows,
 		"unaddressable": skipped,
 	}
 
@@ -191,8 +203,15 @@ static func apply(save: Dictionary, world, player, pack) -> Dictionary:
 		"pitch": float(p.get("pitch", -0.16)),
 	})
 
+	# 背包最后还原。它和世界无关 —— 背包里没有节点、没有位置，
+	# 所以它既不需要等世界建完，也不会因为"内容不在了"而失败
+	# （背包只装 id，认不出的 id 留给菜单去跳过）。
+	var carried: int = 0
+	if player.bag() != null:
+		carried = player.bag().from_save(save.get("bag", []))
+
 	return {"cleared": cleared, "spawned": spawned, "placed": placed,
-		"missing": missing, "error": ""}
+		"carried": carried, "missing": missing, "error": ""}
 
 
 # ---------------------------------------------------------------- 编码

@@ -1,10 +1,11 @@
 extends RefCounted
 
-## 手能做的三件事：**抓、扔、拆**。
+## 手能做的三件事：**抓、扔、收**。
 ##
 ## 为什么这三件事在一个文件里：它们共用同一个"你正对着什么"的判断。
 ## 拆开成两个文件就要把射线打两遍，而两份射线迟早会在起点、距离、屏蔽列表上分叉 ——
-## 表现成"有个位置明明能抓却拆不掉"，是最难查的一类不一致。
+## 表现成"有个位置明明能抓却收不到"，是最难查的一类不一致。
+## 准星也画在这条射线的落点上，理由同上：它必须是同一条射线。
 ##
 ## 这个系统是沙盒乐趣的全部来源，所以它有三个不显眼但决定手感的选择：
 ##
@@ -68,6 +69,10 @@ var _camera: Camera3D = null
 var _bus = null
 var _api = null
 var _world = null
+## 背包。手要它只做一件事：收进来的东西放哪儿。
+## 让手拥有背包（而不是让玩家每次调用时传进来）是因为"收"必须和
+## "背包满没满"一起判断 —— 分开放，某天就会出现"东西没了但没进背包"。
+var _bag = null
 var _held_time := 0.0
 
 
@@ -95,12 +100,13 @@ func _center(b: RigidBody3D) -> Vector3:
 	return b.to_global(b.center_of_mass)
 
 
-func setup(player, camera: Camera3D, bus, api, world) -> void:
+func setup(player, camera: Camera3D, bus, api, world, bag) -> void:
 	_player = player
 	_camera = camera
 	_bus = bus
 	_api = api
 	_world = world
+	_bag = bag
 
 
 func is_holding() -> bool:
@@ -116,17 +122,24 @@ func held_id() -> String:
 
 ## 视线正中能碰到什么。返回任何物理体：刚体、钉住的静态物、房间墙上的碰撞壳。
 func aim_node() -> Node:
-	if _camera == null:
-		return null
+	return aim_hit().get("collider")
+
+
+## 视线射线的原始结果（含 `position` / `normal`）。空字典 = 什么都没打到。
+##
+## 为什么要把它单独露出来：准星要画在**射线打到的地方**，而不是屏幕中心。
+## 第三人称相机在身后 3.8 米，屏幕中心那个点和手的射线在不同位置 ——
+## 画在屏幕中心会骗人：玩家看到一个准星，手却在指别处。
+## 准星是射线的显示，不是射线的定义。
+func aim_hit() -> Dictionary:
+	if _camera == null or _player == null:
+		return {}
 	var from := _origin()
 	var to := from + _aim_dir() * REACH
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.exclude = [_player.get_rid()]
 	q.collide_with_bodies = true
-	var hit: Dictionary = _camera.get_world_3d().direct_space_state.intersect_ray(q)
-	if hit.is_empty():
-		return null
-	return hit.get("collider")
+	return _camera.get_world_3d().direct_space_state.intersect_ray(q)
 
 
 ## 视线正中能抓到什么。只有刚体能被抓 —— 钉住的东西没有物理身份，
@@ -138,25 +151,72 @@ func aim() -> RigidBody3D:
 	return null
 
 
-## 拆掉视线里的东西。返回 true = 真的拆掉了。
+## 手上这条射线现在指着世界的哪个点。`{ok, pos, normal}`。
 ##
-## **只拆玩家和 mod 造出来的**：房间自带的障碍不在 `world.props` 里，
-## `world.remove_thing` 会拒绝。房间是内容的形状，不该被一块一块拆掉 ——
+## 生成菜单用它决定"东西放在哪"：能看见落点，才谈得上"瞄哪儿放哪儿"。
+## 打不到东西时 ok=false，菜单退回"正前方固定距离"——那条老路必须留着，
+## 因为玩家可能正对着天花板或者远处空地。
+func place_point() -> Dictionary:
+	var hit := aim_hit()
+	if hit.is_empty():
+		return {"ok": false, "pos": Vector3.ZERO, "normal": Vector3.UP}
+	var normal: Vector3 = hit.get("normal", Vector3.UP)
+	return {"ok": true, "pos": hit.get("position", Vector3.ZERO), "normal": normal}
+
+
+## 把视线里的东西**收进背包**。返回被收走的内容 id，空串 = 什么都没收。
+##
+## 原来是"拆掉"（`scrape`）。改成"收"是因为删掉不可逆：玩家不敢动自己
+## 刚摆好的东西，而"能放不能收"只是从另一个方向把沙盒锁死。
+## 现在东西没消失，只是回到背包里，可以再放出来。
+##
+## **只收玩家和 mod 造出来的**：房间自带的障碍不在 `world.props` 里，
+## `world.remove_thing` 会拒绝。房间是内容的形状，不该被一块一块搬走 ——
 ## 那会在世界里留下一个既不属于内容、也不属于存档的洞。
 ##
-## 为什么需要有这个动作：生成预算是 96 件，而在此之前**没有任何办法把它还回去**。
-## 玩家放满 96 件之后沙盒就死了，只能重启。能放不能收，不叫沙盒。
-func scrape() -> bool:
-	if _world == null or _player == null:
+## 装不下的时候**什么都不做**（先拿走再发现装不下 = 东西凭空消失）：
+## 背包满、或这一叠到了内容规定的堆叠上限，都算装不下。
+## 判断顺序和 `can_collect()` 一模一样，必须一直一模一样。
+func collect() -> String:
+	if _world == null or _player == null or _bag == null:
+		return ""
+	var node := aim_node()
+	if node == null:
+		return ""
+	# 手上正拿着的东西不收：那个是"要用的"，不是"要扔的"。
+	# 而且射线很容易先打到手里的箱子 —— 误触一次就把刚拿起来的东西弄没了。
+	if is_holding() and node == body:
+		return ""
+	if not _world.is_made(node):
+		return ""
+	var want := String(node.get_meta("content_id", ""))
+	if not _bag.can_add(want):
+		return ""
+	var id := String(_world.remove_thing(node))
+	if id.is_empty():
+		return ""
+	# 走到这里世界里的那一件已经被释放了。背包收下只是记账 ——
+	# 而它不可能失败（上面已经用 can_add 查过），所以这条顺序是安全的。
+	_bag.add(id)
+	return id
+
+
+## 视线里那件东西现在能不能收。准星用它决定亮不亮。
+##
+## 和 `collect()` 的判断顺序一模一样，而且必须一直一模一样 ——
+## 两份判断某天分叉的表现是"准星亮着但按了没反应"，
+## 而玩家只会报告"右键有时候不管用"。
+func can_collect() -> bool:
+	if _world == null or _player == null or _bag == null:
 		return false
 	var node := aim_node()
 	if node == null:
 		return false
-	# 手上正拿着的东西不拆：那个是"要用的"，不是"要扔的"。
-	# 而且射线很容易先打到手里的箱子 —— 误触一次就把刚拿起来的东西弄没了。
 	if is_holding() and node == body:
 		return false
-	return _world.remove_thing(node)
+	if not _world.is_made(node):
+		return false
+	return _bag.can_add(String(node.get_meta("content_id", "")))
 
 
 func press() -> bool:

@@ -114,13 +114,18 @@ func adopt(node: Node) -> void:
 
 ## mod 删掉一件东西。返回 false = 这个 handle 不存在，或者那东西不归玩家删
 ## （比如房间墙上的碰撞壳 —— 它不在 world.props 里，是内容的形状）。
+##
+## 注意这里**没有**背包：mod 的 `remove` 是"让它消失"，玩家的右键是"我收下"。
+## 两个动词不同，共用一条底层路径（`world.remove_thing`）。
+## 让 mod 也能往玩家背包里塞东西是个诱人的主意，但那等于把玩家的库存
+## 变成 mod 的写入目标 —— 而背包是存档的一部分，写坏了没法修。
 func remove(handle: int) -> bool:
 	var b = _bodies.get(handle, null)
 	if b == null or not is_instance_valid(b):
 		return false
 	if _world == null:
 		return false
-	return _world.remove_thing(b)
+	return not String(_world.remove_thing(b)).is_empty()
 
 
 ## 世界里的刚体被整体换掉之后调用（读档）。旧 handle 必须全部作废 ——

@@ -12,6 +12,7 @@ extends CharacterBody3D
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const HANDS = preload("res://scripts/player/hands.gd")
+const BAG = preload("res://scripts/player/bag.gd")
 
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 8.2
@@ -49,6 +50,13 @@ var _arm: SpringArm3D
 var _camera: Camera3D
 var _visual: Node3D
 var _hands
+var _bag
+
+## 收进背包的时候发一下。UI 靠它给反馈 —— 玩家不需要信号，
+## 但"按了之后屏幕上有东西动"是"这个键有用"的唯一证据。
+## 用信号而不是让玩家直接持有 UI：UI 依赖玩家（要读血量、位置），
+## 玩家再依赖 UI 就成了互相牵着，而它们中间的装配层就是 main。
+signal collected(content_id: String)
 
 ## 由 main 在 add_child 之前注入。玩家不自己去找总线 ——
 ## 依赖由装配层给，组件之间不互相伸手（structure.md 四）。
@@ -128,8 +136,9 @@ func _ready() -> void:
 	_camera.current = true
 	_arm.add_child(_camera)
 
+	_bag = BAG.new()
 	_hands = HANDS.new()
-	_hands.setup(self, _camera, hooks, api, world)
+	_hands.setup(self, _camera, hooks, api, world, _bag)
 
 	rotation.y = _yaw
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -151,12 +160,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif _captured:
 			_hands.release(true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-		# 右键拆掉对着的东西。
+		# 右键把对着的东西**收进背包**（不是删掉）。
 		#
 		# 有了这个动作，"生成预算"才是可以还回去的：在此之前玩家放满 96 件
 		# 之后沙盒就死了，只能重启。能放不能收，不叫沙盒。
+		# 而收进背包（而不是销毁）是同一件事的另一半：删掉不可逆，玩家就不敢
+		# 动自己刚摆好的东西 —— 那只是从另一个方向把沙盒锁死。
 		if event.pressed and _captured:
-			_hands.scrape()
+			var got: String = _hands.collect()
+			if not got.is_empty():
+				collected.emit(got)
 	elif event is InputEventKey and event.physical_keycode == KEY_ESCAPE and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_captured = false
@@ -254,6 +267,11 @@ func camera() -> Camera3D:
 ## 抓取器。给探针和调试用 —— 玩法本身不通过这个访问，输入直接喂给它。
 func hands():
 	return _hands
+
+
+## 背包。存档要抄它，菜单要读它，所以它得能被拿到。
+func bag():
+	return _bag
 
 
 ## 存档用：玩家在世界里的"姿势"。

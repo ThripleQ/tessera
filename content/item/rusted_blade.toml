@@ -4,6 +4,19 @@ name = "锈刃"
 doc = "最基础的武器。数值全在数据里，改平衡不用碰代码。"
 tags = ["weapon"]
 
+# 躺在地上的剑。stack = 1：一把就是一把，背包里不叠 ——
+# 叠起来的武器会让人以为可以合成，而那件事今天并不存在。
+[components.model]
+mesh = "prop_blade"
+palette = "default"
+
+[components.collider]
+shape = "box"
+size = 0.55
+height = 0.12
+mass = 1.2
+dynamic = true
+
 [components.wieldable]
 damage = 7
 reach = 1.6

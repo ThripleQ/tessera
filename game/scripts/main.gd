@@ -19,6 +19,7 @@ const LOADER = preload("res://scripts/mods/loader.gd")
 const REGISTRY = preload("res://scripts/mods/registry.gd")
 const SAVE = preload("res://scripts/save/store.gd")
 const SPAWN_MENU = preload("res://scripts/ui/spawn_menu.gd")
+const RETICLE = preload("res://scripts/ui/reticle.gd")
 const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
@@ -201,7 +202,21 @@ func _setup_scene() -> void:
 	menu.pack = pack
 	menu.api = api
 	menu.player = _player
+	menu.bag = _player.bag()
+	# 背包要认识内容：堆叠上限和价值是内容定义的（pickup 组件），
+	# 引擎不写死数值。必须在读档之前接上 —— 读档要按上限压回手改过的存档。
+	_player.bag().pack = pack
 	add_child(menu)
+	# 收东西的反馈走信号，不让玩家直接持有 UI ——
+	# UI 依赖玩家（要读位置），玩家再依赖 UI 就绕成了环。
+	_player.collected.connect(menu.on_collected)
+
+	# 准星是手那条射线的显示。它挂在 main 而不是 world 下：
+	# 它不是世界的一部分（不进存档、不参与物理），只是玩家看见的一个指示。
+	var reticle = RETICLE.new()
+	reticle.name = "reticle"
+	reticle.hands = _player.hands()
+	add_child(reticle)
 
 	# 读档必须在世界和玩家都已就位之后：它要替换整个世界里的刚体，
 	# 并把玩家挪回上次站的地方。
@@ -233,8 +248,8 @@ func _resume() -> void:
 		printerr("读档失败：%s" % err)
 		return
 	var missing: Array = r["missing"]
-	var line := "读档：恢复 %d 个刚体 + %d 个静态物（清掉 %d 个）" \
-		% [r["spawned"], r["placed"], r["cleared"]]
+	var line := "读档：恢复 %d 个刚体 + %d 个静态物（清掉 %d 个），背包 %d 件" \
+		% [r["spawned"], r["placed"], r["cleared"], r.get("carried", 0)]
 	if not missing.is_empty():
 		# 内容不在了（mod 被卸载、原型改名）。玩家有权知道自己的东西为什么少了。
 		line += "  —— %d 种内容找不到，已跳过：%s" % [missing.size(), ", ".join(missing)]
@@ -248,8 +263,9 @@ func _save_now(quiet: bool) -> void:
 	if not SAVE.write(save):
 		return
 	if not quiet:
-		print("已保存：%d 个刚体 + %d 个静态物 -> %s"
-			% [(save["bodies"] as Array).size(), (save["props"] as Array).size(), SAVE.path()])
+		print("已保存：%d 个刚体 + %d 个静态物 + 背包 %d 件 -> %s"
+			% [(save["bodies"] as Array).size(), (save["props"] as Array).size(),
+				(save["bag"] as Array).size(), SAVE.path()])
 
 
 ## F5 存、F9 读。手动存档先于自动存档存在，理由很实在：

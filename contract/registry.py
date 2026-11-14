@@ -131,9 +131,11 @@ LOOT_TABLES: tuple[str, ...] = ("none", "common", "rare")
 # 不一致就失败。这样"预算"才不会在改几何的过程中悄悄失真。
 MESHES: dict[str, int] = {
     "humanoid_lowpoly": 96,   # 8 个盒子：躯干/头/四肢/胸甲/护肩
-    "shade_lowpoly": 48,      # 六棱台袍子 36 + 头盒 12
+    "shade_lowpoly": 48,      # 六棱台袍子 + 头盒（实测 48）
     "prop_crate": 12,
     "prop_pillar": 24,
+    "prop_gem": 40,           # 两个四棱锥（cylinder 4 段，实测 40）
+    "prop_blade": 36,         # 3 个盒子：剑身/护手/剑柄
     "player_lowpoly": 692,    # 球头 + 7 盒 + 12 段柱体。主角只有一个，贵得起
 }
 
@@ -348,7 +350,8 @@ component(
 
 component(
     "pickup",
-    "可拾取物。",
+    "可拾取物。stack 是**背包里的堆叠上限**（同一个 id 最多几件），"
+    "value 是价值。两个数都被引擎读：堆叠上限由背包强制，价值进背包合计。",
     value=Field("int", 1, 0, 1_000_000, doc="价值"),
     stack=Field("int", 1, 1, 999, doc="堆叠上限"),
 )

@@ -4,6 +4,18 @@ name = "骨符"
 doc = "消耗品。堆叠上限 20，价值 5。"
 tags = ["charm"]
 
+# model + collider 让它能被摆在世界里、被右键收走 —— 没有这两个组件，
+# item 就只存在于数据里，谁也拿不到它。拾取的全部意义从"能收进背包"开始。
+[components.model]
+mesh = "prop_gem"
+palette = "bone"
+
+[components.collider]
+shape = "sphere"
+size = 0.34
+mass = 0.25
+dynamic = true
+
 [components.pickup]
 value = 5
 stack = 20

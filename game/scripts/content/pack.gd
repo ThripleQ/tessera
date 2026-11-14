@@ -87,6 +87,32 @@ func label_of(content_id: String) -> String:
 	return n if not n.is_empty() else content_id
 
 
+## 堆叠上限：同一个 id 在背包里最多几件。0 = 不限。
+##
+## 数字只来自内容的 `pickup.stack`，引擎不写死任何数值（铁律 2）。
+## 没有 pickup 组件的东西返回 0 —— 木箱不声明"能叠几箱"，是因为叠几箱
+## 都说得通，而写死一个数等于引擎在替内容做决定。
+func stack_limit(content_id: String) -> int:
+	var e = entities.get(content_id, null)
+	if e == null:
+		return 0
+	var pickup: Dictionary = e.get("components", {}).get("pickup", {})
+	if pickup.is_empty():
+		return 0
+	return int(pickup.get("stack", 1))
+
+
+## 价值。背包合计显示用；没有 pickup 组件的东西价值 0。
+func value_of(content_id: String) -> int:
+	var e = entities.get(content_id, null)
+	if e == null:
+		return 0
+	var pickup: Dictionary = e.get("components", {}).get("pickup", {})
+	if pickup.is_empty():
+		return 0
+	return int(pickup.get("value", 0))
+
+
 ## 世界里实际会用到的网格种类。合批是按网格分组的，
 ## 所以这个集合的大小直接决定提交次数的量级。
 func mesh_ids() -> PackedStringArray:

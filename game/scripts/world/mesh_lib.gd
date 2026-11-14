@@ -8,9 +8,11 @@ extends RefCounted
 ##
 ## 几何全部由 BoxMesh / CylinderMesh 拼成，三角形数与 registry.MESHES 的规划值对齐。
 ##   humanoid_lowpoly  8 盒 = 96 tri
-##   shade_lowpoly     六棱台 24 + 头 12 = 36 tri
+##   shade_lowpoly     六棱台 + 头盒 = 48 tri
 ##   prop_crate        1 盒 = 12 tri
 ##   prop_pillar       2 盒 = 24 tri
+##   prop_gem          2 个四棱锥（cylinder 4 段）= 40 tri
+##   prop_blade        3 盒 = 36 tri
 ##
 ## 网格是引擎的实现细节，所以这里允许出现具体名字（见铁律 2 的例外条款）。
 
@@ -22,6 +24,8 @@ const IMPLEMENTED: Array[String] = [
 	"shade_lowpoly",
 	"prop_crate",
 	"prop_pillar",
+	"prop_gem",
+	"prop_blade",
 	"player_lowpoly",
 ]
 
@@ -98,6 +102,18 @@ static func build(mesh_id: String) -> ArrayMesh:
 		"prop_pillar":
 			_box(st, Vector3(0.50, 2.20, 0.50), Vector3(0.00, 1.10, 0.00))
 			_box(st, Vector3(0.70, 0.16, 0.70), Vector3(0.00, 2.28, 0.00))
+		"prop_gem":
+			# 两个四棱锥对扣的钻石。骨符是"捡起来的小东西"，
+			# 用箱子的形状会让人以为它能坐。宝石要一眼是宝石。
+			_cylinder(st, 0.0, 0.21, 0.26, Vector3(0.00, 0.31, 0.00), 4)   # 上半：尖朝上
+			_cylinder(st, 0.21, 0.0, 0.18, Vector3(0.00, 0.09, 0.00), 4)   # 下半：尖朝下
+		"prop_blade":
+			# 一把躺在地上的剑：剑身 + 护手 + 剑柄。原点在底面中心，
+			# 躺倒的姿态不用旋转就成立 —— 摆出来的东西本来就该躺在地上，
+			# 立着的剑只会被撞倒，然后所有人花时间想"它为什么立着"。
+			_box(st, Vector3(0.075, 0.045, 0.82), Vector3(0.00, 0.045, -0.17))  # 剑身
+			_box(st, Vector3(0.24, 0.05, 0.07), Vector3(0.00, 0.045, 0.28))     # 护手
+			_box(st, Vector3(0.065, 0.055, 0.24), Vector3(0.00, 0.045, 0.44))   # 剑柄
 		"player_lowpoly":
 			# 主角。全身 1.72 米、约 6.5 头身 —— 这个比例是"动漫感"的第一来源，
 			# 比多边形数重要得多：4 头身不管怎么打光都像玩具，6.5 头身哪怕全是色块

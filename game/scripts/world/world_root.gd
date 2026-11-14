@@ -144,6 +144,21 @@ func add_static(item: Dictionary) -> Node3D:
 	return body
 
 
+## 这件东西是不是"造出来的"（玩家放的、或者 mod 造的）。
+## 房间自带的障碍不在里面 —— 它们是内容的形状，不在任何一份记账里。
+##
+## 和 `remove_thing` 一样**先按类型分岔**：在两个类型化数组上做 `has`，
+## 拿错类型照样是引擎报错，不是返回 false。
+func is_made(node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+	if node is RigidBody3D:
+		return bodies.has(node)
+	if node is Node3D:
+		return props.has(node)
+	return false
+
+
 ## 清空所有"被造出来的东西"：动态刚体 + 玩家摆的静态物体。
 ## 载入存档时必须先清再建 —— 否则旧的会和新的一起留在世界里，
 ## 而且每读一次档数量就涨一轮。
@@ -168,9 +183,14 @@ func clear_spawned() -> int:
 
 
 ## 拿掉**一件**被造出来的东西。动态的归还 handle 和预算，静态的直接释放。
-## 返回 true = 它确实是我的东西（在 bodies 或 props 里）。
 ##
-## 这个判断很重要：射线打到房间墙上的碰撞壳时，`remove_thing` 必须返回 false。
+## **返回被拿走那件的内容 id**，空串 = 它不归我（不在 bodies 或 props 里）。
+##
+## 为什么返回 id 而不是 bool：调用方两边都需要它 —— 玩家右键要把它装进背包，
+## 而 mod 的 `api.remove` 只要"成不成"。返回 bool 会让前者再查一遍
+## "刚才拿掉的是哪个"，而那时节点已经 queue_free 了。
+##
+## 这个判断很重要：射线打到房间墙上的碰撞壳时，`remove_thing` 必须返回空串。
 ## 房间的障碍不在 `props` 里，正是因为那条分界 —— 它们是内容的形状，
 ## 玩家不该能一块一块拆掉房间。
 ##
@@ -178,14 +198,14 @@ func clear_spawned() -> int:
 ## StaticBody3D 去 `find` 是类型错误 —— 引擎会打一条 ERROR 再返回 -1。
 ## 功能上刚好"对"（落到 props 分支），所以探针照样绿、grep 也看不见，
 ## 只有真跑起来看 stderr 才知道玩家每右键一次墙，日志就脏一行。
-func remove_thing(node: Node) -> bool:
+func remove_thing(node: Node) -> String:
 	if node == null or not is_instance_valid(node):
-		return false
+		return ""
 
 	if node is RigidBody3D:
 		var i := bodies.find(node)
 		if i < 0:
-			return false
+			return ""
 		var id := String(node.get_meta("content_id", ""))
 		var h := int(node.get_meta("handle", 0))
 		var pos: Vector3 = node.global_position
@@ -198,17 +218,17 @@ func remove_thing(node: Node) -> bool:
 		if bus != null and h > 0:
 			bus.emit("entity.remove", {"id": id, "handle": h, "pos": pos})
 		node.queue_free()
-		return true
+		return id
 
 	var j := props.find(node)
-	if j >= 0:
-		props.remove_at(j)
-		if api != null:
-			api.release(node)
-		node.queue_free()
-		return true
-
-	return false
+	if j < 0:
+		return ""
+	var pid := String(node.get_meta("content_id", ""))
+	props.remove_at(j)
+	if api != null:
+		api.release(node)
+	node.queue_free()
+	return pid
 
 
 ## 开场该站在哪。优先选有刚体的房间 —— 玩家第一眼就该看到"东西会动"，
