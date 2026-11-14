@@ -37,8 +37,18 @@ static func should_draw(cam: Camera3D, box: AABB) -> bool:
 	return _in_frustum(cam.get_frustum(), box)
 
 
-## 包围盒是否在视锥内。逐平面取"离平面最近的那个顶点"，
-## 有一个平面把它挡在外面就算出局。
+## 包围盒是否在视锥内。
+##
+## **这里踩过两次坑，两次都不报错**，所以约定必须写下来：
+## Godot 的 `Camera3D.get_frustum()` 返回的平面，法线朝**外** ——
+## 一个视野正中的点，到六个平面的有符号距离**全是负数**（实测，不是推断）。
+## 所以"在内"= 距离 < 0，"整个盒子在外" = 某个平面的**最近顶点**都在外侧。
+##
+## 两次写错分别是：
+##   顶点取对了、比较号写反（`< 0` 当出局）→ 世界被剔得只剩免剔区里的两件
+##   改成"最可能在内"的顶点 → 仍然错，因为那个顶点在外不代表整盒在外
+## 两种的共同症状是"站在房间里看着空荡荡的世界"，而验收全绿 ——
+## 所以探针里有一条**和 Godot 自己的 `is_position_in_frustum` 对拍**的断言。
 static func _in_frustum(planes: Array, box: AABB) -> bool:
 	for p in planes:
 		var n: Vector3 = p.normal
@@ -46,7 +56,7 @@ static func _in_frustum(planes: Array, box: AABB) -> bool:
 			box.position.x + (box.size.x if n.x < 0.0 else 0.0),
 			box.position.y + (box.size.y if n.y < 0.0 else 0.0),
 			box.position.z + (box.size.z if n.z < 0.0 else 0.0))
-		if p.distance_to(near) < 0.0:
+		if p.distance_to(near) > 0.0:
 			return false
 	return true
 

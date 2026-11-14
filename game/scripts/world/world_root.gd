@@ -8,13 +8,15 @@ extends Node3D
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const CHUNK_SCRIPT = preload("res://scripts/world/chunk.gd")
 const SOLIDS = preload("res://scripts/physics/solids.gd")
-
-## 超过这个距离的块整体不画。第一级剔除，粒度就是块。
-const VISIBLE_RANGE := 120.0
+const CULLING = preload("res://scripts/world/culling.gd")
 
 ## 撞击事件的门槛。太轻的接触不发 —— 事件也要按预算来，
 ## 否则一堆箱子互相靠着就能把每帧事件额度吃光。
 const IMPACT_MIN_SPEED := 2.0
+
+## 单件剔除用的包围球半径。1.5 米比最大的道具（2.2 米的柱子）的半宽大，
+## 宁可包大一点也不要"探头进屏幕却没画"—— 剔除只有多画是对的。
+const PROP_CULL_RADIUS := 1.5
 
 var chunks: Dictionary = {}
 ## 有独立物理身份的东西。mod 通过 handle 认出它们，但它们本身不知道 mod 存在。
@@ -33,6 +35,10 @@ var api = null
 var _camera: Camera3D = null
 var _rooms_with_rigid: Array[String] = []
 var _speeds: Dictionary = {}
+
+## 上一帧的剔除结果。给探针读 —— "该剔的剔了吗"必须能被断言，
+## 否则剔除退化成"什么都不剔"时，验收照样全绿，只是帧时慢慢涨。
+var cull_stats := {"shown": 0, "hidden": 0}
 
 
 func realize(plan) -> void:
@@ -283,16 +289,50 @@ func attach_camera(cam: Camera3D) -> void:
 	_camera = cam
 
 
-## 第一级剔除：整块在视距外就不画。故意做成最粗的粒度——
-## 逐实例的视锥剔除是后面的事，先把"内容多但同屏少"这条路走通。
+## 剔除：决定这一帧画谁。**只管画，不动物理** ——
+## 隐藏起来的箱子照样挡路、照样能被抓、照样进存档。
+##
+## 三类东西过同一份判定（`culling.gd`），但包围盒的来源不同：
+##   块    —— 房间的 bounds。合批的单位，只能整块进退，粒度最粗
+##   刚体  —— 逐件。它们各自一格渲染，正该逐件判
+##   静态物 —— 逐件。玩家摆的东西**以前完全不在剔除范围里**，放多少画多少
+##
+## 最后那条就是这一轮要还的账：`props` 挂在 world 下、不进任何块，
+## 而老的剔除只遍历 `chunks` —— 于是玩家摆满 96 件之后，96 件全在画。
 func _process(_delta: float) -> void:
 	if _camera == null:
 		return
+	var shown := 0
+	var hidden := 0
 	for room_id in chunks:
 		var chunk = chunks[room_id]
-		var c: Vector3 = chunk.bounds.get_center()
-		var d := Vector2(c.x - _camera.position.x, c.z - _camera.position.z).length()
-		chunk.visible = d <= VISIBLE_RANGE
+		var draw: bool = CULLING.should_draw(_camera, chunk.bounds)
+		chunk.visible = draw
+		if draw:
+			shown += 1
+		else:
+			hidden += 1
+	for p in props:
+		if not is_instance_valid(p):
+			continue
+		var draw: bool = CULLING.should_draw(
+			_camera, CULLING.ball(p.global_position, PROP_CULL_RADIUS))
+		p.visible = draw
+		if draw:
+			shown += 1
+		else:
+			hidden += 1
+	for rb in bodies:
+		if not is_instance_valid(rb):
+			continue
+		var draw: bool = CULLING.should_draw(
+			_camera, CULLING.ball(rb.global_position, PROP_CULL_RADIUS))
+		rb.visible = draw
+		if draw:
+			shown += 1
+		else:
+			hidden += 1
+	cull_stats = {"shown": shown, "hidden": hidden}
 
 
 ## 记录每个刚体的速度。这不是"为了撞击事件多跑一趟"——
