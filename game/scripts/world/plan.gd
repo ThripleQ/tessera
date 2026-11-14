@@ -9,7 +9,7 @@ extends RefCounted
 ## 分层：Pack（读数据）→ Plan（排世界）→ WorldRoot（建节点）。
 ## 每一层只依赖上一层，改一层不会牵动另一层。
 
-const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+const ASSETS = preload("res://scripts/world/assets.gd")
 
 ## 房间之间留的走道。这是引擎的布局规则，不是内容。
 const ROOM_GAP := 12.0
@@ -68,7 +68,7 @@ func _fill_room(room: Dictionary, pack, room_id: String, comps: Dictionary,
 		return
 
 	var mesh_id := String(probe["mesh"])
-	if MESH_LIB.build(mesh_id) == null:
+	if ASSETS.mesh(mesh_id) == null:
 		_note_skip("网格 `%s` 引擎没实现几何，房间 `%s` 的内容被跳过" % [mesh_id, room_id])
 		return
 
@@ -152,7 +152,7 @@ func triangle_count() -> int:
 	var t := 0
 	for room_id in rooms:
 		for item in rooms[room_id]["items"]:
-			t += MESH_LIB.triangles_of(String(item["mesh"]))
+			t += ASSETS.triangles_of(String(item["mesh"]))
 	return t
 
 

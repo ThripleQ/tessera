@@ -1,0 +1,13 @@
+[mod]
+id = "asset_demo"
+name = "外观开放示例：钻石箱"
+version = "1.0.0"
+api_version = 1
+author = "tessera 官方示例"
+level = "data"
+description = """
+一个纯资源包：没有内容、没有脚本，只把 assets/meshes/ 里的模型盖到内置网格上。
+level = data，默认放行，不需要 --trust —— 换外貌不该要求玩家运行任意代码。
+
+它是通道的验收样品，不是玩法内容。真实资源包怎么放见 ASSETS.md。
+"""

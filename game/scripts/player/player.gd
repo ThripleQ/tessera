@@ -10,6 +10,7 @@ extends CharacterBody3D
 ##   AIR_ACCEL    空中的方向修正力只有地面的 1/5，跳出去就必须为落点负责
 ## 这三个是"看起来粗糙但手感好"的典型例子：它们不增加任何视觉效果。
 
+const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const HANDS = preload("res://scripts/player/hands.gd")
 const BAG = preload("res://scripts/player/bag.gd")
@@ -98,7 +99,7 @@ func _ready() -> void:
 	_visual.name = "visual"
 	add_child(_visual)
 	var mesh := MeshInstance3D.new()
-	mesh.mesh = MESH_LIB.build("player_lowpoly")
+	mesh.mesh = ASSETS.mesh("player_lowpoly")
 	mesh.material_override = MESH_LIB.toon_material_for(PLAYER_COLOR, 0.013)
 	_visual.add_child(mesh)
 

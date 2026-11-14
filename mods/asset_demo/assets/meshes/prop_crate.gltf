@@ -1,0 +1,91 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "tessera asset_demo sample"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "diamond_crate"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "diamond_crate",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AAAAAM3MTD8AAAAAzczMPs3MzD7NzMy+zczMvs3MzD7NzMy+AAAAAAAAAAAAAAAAzczMvs3MzD7NzMy+zczMPs3MzD7NzMy+AAAAAM3MTD8AAAAAzczMPs3MzD7NzMw+zczMPs3MzD7NzMy+AAAAAAAAAAAAAAAAzczMPs3MzD7NzMy+zczMPs3MzD7NzMw+AAAAAM3MTD8AAAAAzczMvs3MzD7NzMw+zczMPs3MzD7NzMw+AAAAAAAAAAAAAAAAzczMPs3MzD7NzMw+zczMvs3MzD7NzMw+AAAAAM3MTD8AAAAAzczMvs3MzD7NzMy+zczMvs3MzD7NzMw+AAAAAAAAAAAAAAAAzczMvs3MzD7NzMw+zczMvs3MzD7NzMy+AAAAAPMENT/zBDW/AAAAAPMENT/zBDW/AAAAAPMENT/zBDW/AAAAAPMENb/zBDW/AAAAAPMENb/zBDW/AAAAAPMENb/zBDW/8wQ1P/MENT8AAAAA8wQ1P/MENT8AAAAA8wQ1P/MENT8AAAAA8wQ1P/MENb8AAAAA8wQ1P/MENb8AAAAA8wQ1P/MENb8AAAAAAAAAAPMENT/zBDU/AAAAAPMENT/zBDU/AAAAAPMENT/zBDU/AAAAAPMENb/zBDU/AAAAAPMENb/zBDU/AAAAAPMENb/zBDU/8wQ1v/MENT8AAAAA8wQ1v/MENT8AAAAA8wQ1v/MENT8AAAAA8wQ1v/MENb8AAAAA8wQ1v/MENb8AAAAA8wQ1v/MENb8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/",
+      "byteLength": 768
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 192,
+      "target": 34962
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.4,
+        0.0,
+        -0.4
+      ],
+      "max": [
+        0.4,
+        0.8,
+        0.4
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    }
+  ]
+}

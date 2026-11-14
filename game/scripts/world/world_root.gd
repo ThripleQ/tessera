@@ -5,6 +5,7 @@ extends Node3D
 ## 所有"世界里有什么、排在哪"都在 Plan 里定好了；这里只回答
 ## "现在这一帧哪些块需要画"。
 
+const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const CHUNK_SCRIPT = preload("res://scripts/world/chunk.gd")
 const SOLIDS = preload("res://scripts/physics/solids.gd")
@@ -149,7 +150,7 @@ func add_dynamic(item: Dictionary) -> RigidBody3D:
 ## 玩家和 mod 摆出来的东西不属于任何块，必须自带网格 ——
 ## 否则会得到一个看不见但会挡路的幽灵。
 func add_static(item: Dictionary) -> Node3D:
-	var mesh := MESH_LIB.build(String(item["mesh"]))
+	var mesh := ASSETS.mesh(String(item["mesh"]))
 	if mesh == null:
 		return null
 	var body: StaticBody3D = SOLIDS.make_static(item)

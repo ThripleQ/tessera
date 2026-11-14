@@ -8,6 +8,7 @@ extends Node3D
 ## 建块分两步：先 plan（纯数据，无头模式只走这一步好统计），再 realize（生成节点）。
 ## 分开是为了让 check.sh 能在没有 GPU 的机器上拿到真实的批次与三角形数。
 
+const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 
 static var _floor_mat: ShaderMaterial = null
@@ -28,7 +29,7 @@ func add_instance(item: Dictionary) -> bool:
 	if bool(item.get("dynamic", false)):
 		return false
 	var mesh_id := String(item["mesh"])
-	if MESH_LIB.build(mesh_id) == null:
+	if ASSETS.mesh(mesh_id) == null:
 		if not _skipped.has(mesh_id):
 			_skipped.append(mesh_id)
 		return false
@@ -51,7 +52,7 @@ func batch_count() -> int:
 func triangle_count() -> int:
 	var t := 0
 	for mesh_id in _plan:
-		t += MESH_LIB.triangles_of(mesh_id) * (_plan[mesh_id] as Array).size()
+		t += ASSETS.triangles_of(mesh_id) * (_plan[mesh_id] as Array).size()
 	return t
 
 
@@ -64,7 +65,7 @@ func realize() -> void:
 		var items: Array = _plan[mesh_id]
 		if items.is_empty():
 			continue
-		var mesh := MESH_LIB.build(mesh_id)
+		var mesh := ASSETS.mesh(mesh_id)
 		if mesh == null:
 			continue
 

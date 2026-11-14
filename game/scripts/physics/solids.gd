@@ -8,6 +8,7 @@ extends RefCounted
 ## 为什么单独一层：渲染要合批（静态），物理要独立身份（动态），两者需求相反。
 ## 混在一个文件里，迟早会出现"为了让物理跑起来把合批拆了"这种倒退。
 
+const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 
 ## 契约只给一个"特征尺寸"，胶囊的总高要么由内容给，要么按人形比例推。
@@ -102,7 +103,7 @@ static func make_dynamic(item: Dictionary) -> RigidBody3D:
 
 	var visual := MeshInstance3D.new()
 	visual.name = "visual"
-	visual.mesh = MESH_LIB.build(String(item["mesh"]))
+	visual.mesh = ASSETS.mesh(String(item["mesh"]))
 	visual.material_override = MESH_LIB.toon_material_for(item["color"])
 	body.add_child(visual)
 	return body

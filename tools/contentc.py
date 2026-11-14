@@ -793,7 +793,13 @@ def build_mod(
         inputs = base + [str(content_dir)]
         pack, e, w = build_pack(inputs, script_root=mod_dir)
     else:
-        pack = {"counts": {}, "entities": {}, "warnings": []}
+        # 纯资源包（只有 assets/ 和 mod.toml）也是合法 mod：外观开放靠的就是
+        # "零内容也能换画面"。骨架要和 build_pack 的产物同形，否则下面裁剪
+        # 扩展声明时会 KeyError —— 这个 bug 只有在出现第一个纯资源 mod 时才暴露。
+        pack = {
+            "counts": {}, "entities": {}, "warnings": [],
+            "extensions": {"components": {}, "systems": {}},
+        }
         e, w = [], []
         warnings.append(f"{rel(mod_dir)}: 没有 content/ 目录，这个 mod 不添加任何内容")
     errors += e
@@ -821,15 +827,16 @@ def build_mod(
     # 扩展产物也要按同一份 diff 裁剪：基线里已有的组件声明不该被每个 mod
     # 重复带一份，否则运行时会把「谁声明了它」算错。
     changed_ids = set(changed)
+    ext_src: dict = pack.get("extensions", {})
     ext_components: dict[str, dict] = {}
-    for key, spec in pack["extensions"]["components"].items():
+    for key, spec in ext_src.get("components", {}).items():
         if spec.get("id") not in changed_ids:
             continue
         item = copy.deepcopy(spec)
         item["origin"] = mid
         ext_components[key] = item
     ext_systems: dict[str, dict] = {
-        cid: spec for cid, spec in pack["extensions"]["systems"].items()
+        cid: spec for cid, spec in ext_src.get("systems", {}).items()
         if cid in changed_ids
     }
     extensions = {"components": ext_components, "systems": ext_systems}
