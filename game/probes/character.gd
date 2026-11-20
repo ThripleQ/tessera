@@ -59,8 +59,11 @@ func _process(_delta: float) -> bool:
 		# 下面这条就会被锁挡住，测出来的不是状态机而是落地动作。
 		_rig.set("_lock", 0.0)
 		_rig.set("_on_floor", true)
-		_rig.update_locomotion(4.0, true, 0.0, 0.016)
-		_say("走路", "速度 4.0 m/s → %s" % _rig.state(), _rig.state() == "walk")
+		# 用资产反推出来的走路速度，不用写死的数 —— 写死的话人一换就假红，
+		# 而这条断言想验的是"状态机会不会按速度分档"，不是"速度是不是 4.0"。
+		var w: float = _rig.gait_walk()
+		_rig.update_locomotion(w, true, 0.0, 0.016)
+		_say("走路", "速度 %.2f m/s → %s" % [w, _rig.state()], _rig.state() == "walk")
 	elif _f == 14:
 		# 等 8 帧：交叉淡入是 0.18 秒，太早采样会拿到几乎没变的姿势。
 		_pose_a = _sample_pose()
@@ -176,10 +179,14 @@ func _check_motion() -> void:
 
 
 func _check_states() -> void:
+	# 分档阈值不再写死：走 / 跑两条用资产反推的速度，中间那条落在两档之间，
+	# 具体选哪条片段由 choose_gait() 按对数距离决定（第 15 步会逐个速度点验）。
+	var w: float = _rig.gait_walk()
+	var r: float = _rig.gait_run()
 	var cases := [
 		{"speed": 0.0, "floor": true, "vy": 0.0, "want": "idle"},
-		{"speed": 3.0, "floor": true, "vy": 0.0, "want": "walk"},
-		{"speed": 7.0, "floor": true, "vy": 0.0, "want": "run"},
+		{"speed": w, "floor": true, "vy": 0.0, "want": "walk"},
+		{"speed": r, "floor": true, "vy": 0.0, "want": "run"},
 		{"speed": 0.0, "floor": false, "vy": 5.0, "want": "jump_up"},
 		{"speed": 0.0, "floor": false, "vy": -3.0, "want": "jump_air"},
 	]
