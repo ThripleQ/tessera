@@ -317,11 +317,15 @@ func attach_camera(cam: Camera3D) -> void:
 func _process(_delta: float) -> void:
 	if _camera == null:
 		return
+	# 视锥这一帧只建一次，后面逐件判定都复用它。
+	# 以前每个 chunk / 刚体 / 静态物各建一次，26 件东西就是 26 个数组
+	# 加 156 个平面对象 —— 每帧。而它一帧内根本不会变。
+	var snap: Dictionary = CULLING.snapshot(_camera)
 	var shown := 0
 	var hidden := 0
 	for room_id in chunks:
 		var chunk = chunks[room_id]
-		var draw: bool = CULLING.should_draw(_camera, chunk.bounds)
+		var draw: bool = CULLING.should_draw_in(snap, chunk.bounds)
 		chunk.visible = draw
 		if draw:
 			shown += 1
@@ -330,8 +334,8 @@ func _process(_delta: float) -> void:
 	for p in props:
 		if not is_instance_valid(p):
 			continue
-		var draw: bool = CULLING.should_draw(
-			_camera, CULLING.ball(p.global_position, PROP_CULL_RADIUS))
+		var draw: bool = CULLING.should_draw_in(
+			snap, CULLING.ball(p.global_position, PROP_CULL_RADIUS))
 		p.visible = draw
 		if draw:
 			shown += 1
@@ -340,14 +344,17 @@ func _process(_delta: float) -> void:
 	for rb in bodies:
 		if not is_instance_valid(rb):
 			continue
-		var draw: bool = CULLING.should_draw(
-			_camera, CULLING.ball(rb.global_position, PROP_CULL_RADIUS))
+		var draw: bool = CULLING.should_draw_in(
+			snap, CULLING.ball(rb.global_position, PROP_CULL_RADIUS))
 		rb.visible = draw
 		if draw:
 			shown += 1
 		else:
 			hidden += 1
-	cull_stats = {"shown": shown, "hidden": hidden}
+	# 原地改，不每帧造一个新字典。这个对象每帧都会被探针读，
+	# 而"每帧一个新字典"是那种单看不贵、叠在所有每帧小分配里就很难看的写法。
+	cull_stats["shown"] = shown
+	cull_stats["hidden"] = hidden
 
 
 ## 记录每个刚体的速度。这不是"为了撞击事件多跑一趟"——

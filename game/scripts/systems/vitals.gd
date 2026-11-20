@@ -71,7 +71,13 @@ func step(dt: float) -> void:
 			# 每秒回血，按帧折算。不做成"每秒一跳"是因为
 			# 那会让回血在帧率变化时忽快忽慢，而血量不该跟着帧率走。
 			_heal(rb, regen * dt)
-		if _hp_of(rb, comps) <= 0:
+		# 没有 hp 记录 = 满血，而满血的东西不可能死。
+		# 掉血的唯一来源是撞击（走 `_hurt`），它一定会写下这条记录。
+		# 所以这里可以直接跳过 —— 省掉的是每只怪每帧一次 meta 查询
+		# 加两次组件字典取值，而它们 99.9% 的帧都在回答"我还活着"。
+		if not rb.has_meta(META_HP):
+			continue
+		if int(rb.get_meta(META_HP)) <= 0:
 			dead.append(rb)
 	for rb in dead:
 		_die(rb)

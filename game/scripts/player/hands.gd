@@ -75,6 +75,19 @@ var _world = null
 var _bag = null
 var _held_time := 0.0
 
+## 复用的射线查询对象。`PhysicsRayQueryParameters3D.create()` 每帧新建一份
+## 是把"每帧都要做的事"当成"偶尔做的事"来写：准星一帧要问两次落点，
+## 每次带一份新对象和一条新数组，全是垃圾。
+##
+## **只复用对象，不复用结果。** 试过按"射线参数相同"缓存命中结果，生成菜单
+## 探针立刻红了：世界在同一帧内也会变（刚放下的柱子就落在射线里），
+## 而参数没变 —— 于是缓存给出的是上一刻的世界。射线的答案属于"现在"。
+var _ray := PhysicsRayQueryParameters3D.new()
+var _ray_exclude: Array[RID] = []
+## 给探针看：一共打了几条射线。一帧三条是正常的（准星落点 / 能不能收 / 菜单落点），
+## 它涨到十几条就说明有人在循环里问"我对着什么"。
+static var ray_builds := 0
+
 
 ## 手的位置：角色胸口，不是相机。
 func _origin() -> Vector3:
@@ -136,10 +149,14 @@ func aim_hit() -> Dictionary:
 		return {}
 	var from := _origin()
 	var to := from + _aim_dir() * REACH
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.exclude = [_player.get_rid()]
-	q.collide_with_bodies = true
-	return _camera.get_world_3d().direct_space_state.intersect_ray(q)
+	ray_builds += 1
+	_ray.from = from
+	_ray.to = to
+	_ray.collide_with_bodies = true
+	_ray_exclude.clear()
+	_ray_exclude.append(_player.get_rid())
+	_ray.exclude = _ray_exclude
+	return _camera.get_world_3d().direct_space_state.intersect_ray(_ray)
 
 
 ## 视线正中能抓到什么。只有刚体能被抓 —— 钉住的东西没有物理身份，

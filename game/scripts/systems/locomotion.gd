@@ -17,6 +17,13 @@ extends RefCounted
 
 const system_name := "locomotion"
 
+## 朝向变化小于这个角度就不写 rotation。约 1.5 度，肉眼看不出来。
+##
+## 这不是"省一点的优化"，而是"别做没用的事"：写 rotation 要穿过物理服务器，
+## 比算一次点积贵得多，而一只绕着家游荡的怪，每帧的朝向变化常常不到 1 度。
+## 96 只怪 × 60 帧 × 每帧一次无用的物理写入，就是白烧掉的一截帧时间。
+const TURN_EPSILON := 0.026
+
 var world = null
 var player = null
 var pack = null
@@ -57,7 +64,15 @@ func step(dt: float) -> void:
 			# 只转 yaw。lock_rotation 已经保证它不会被物理甩翻，
 			# 这里负责让它面对想去的方向。直接写 rotation 是刻意的：
 			# 对一个锁了旋转的刚体来说，角速度那条路走不通。
-			rb.rotation = Vector3(0.0, atan2(want.x, want.z), 0.0)
+			#
+			# **只在真的转向时写。** 写 rotation 要穿过物理服务器，比算一次
+			# 点积贵得多，而游荡的怪每帧的朝向变化常常不到 1 度 ——
+			# 那些写全是白给。1.5 度以下是肉眼看不出来的差别。
+			var target_yaw := atan2(want.x, want.z)
+			var cur: float = rb.rotation.y
+			var diff := wrapf(target_yaw - cur, -PI, PI)
+			if absf(diff) > TURN_EPSILON:
+				rb.rotation.y = cur + diff
 
 
 ## 这一帧想去哪儿。返回速度向量（长度就是 speed，方向是意图）。

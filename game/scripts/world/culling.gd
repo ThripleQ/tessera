@@ -24,17 +24,41 @@ const NEAR_GUARD := 6.0
 
 
 ## 一件东西这一帧要不要画。box 是**世界坐标**的包围盒。
+##
+## **逐件调用它等于把视锥建 N 遍。** `Camera3D.get_frustum()` 每次都会
+## 新分配一个数组和 6 个平面对象，而它在一帧内根本不会变。
+## 所以批量判定请用 `snapshot()` + `should_draw_in()`；这个单件入口
+## 留着给"只有一件东西要判"的调用方（探针、临时查询）。
 static func should_draw(cam: Camera3D, box: AABB) -> bool:
+	return should_draw_in(snapshot(cam), box)
+
+
+## 一帧一份的相机快照：位置 + 视锥。**每帧只能建一次**，计数给探针看。
+##
+## 为什么把它做成显式的一步：这个对象贵，而"贵的东西每帧建一次"这件事
+## 只有在调用点写得足够笨的时候才看得见。有了它，误用（在循环里调
+## should_draw）会立刻在 PERF 那行显示成"视锥构建 26 次"。
+static var frustum_builds := 0
+
+
+static func snapshot(cam: Camera3D) -> Dictionary:
+	frustum_builds += 1
 	if cam == null:
+		return {"valid": false, "pos": Vector3.ZERO, "planes": []}
+	return {"valid": true, "pos": cam.global_position, "planes": cam.get_frustum()}
+
+
+static func should_draw_in(snap: Dictionary, box: AABB) -> bool:
+	if not bool(snap.get("valid", false)):
 		return true
 	var c := box.get_center()
-	var cam_pos: Vector3 = cam.global_position
+	var cam_pos: Vector3 = snap["pos"]
 	var d := Vector2(c.x - cam_pos.x, c.z - cam_pos.z).length()
 	if d > VISIBLE_RANGE:
 		return false
 	if d <= NEAR_GUARD:
 		return true
-	return _in_frustum(cam.get_frustum(), box)
+	return _in_frustum(snap["planes"], box)
 
 
 ## 包围盒是否在视锥内。

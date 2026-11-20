@@ -19,6 +19,10 @@ extends RefCounted
 const MAX_SPAWNED := 96
 const MAX_QUERY := 64
 
+## 染色要先问它"这份材质是不是共享的"。同色的东西现在共用一份材质
+## （这是一次实打实的提交次数优化），所以就地改色必须先把它拆成私有的。
+const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+
 var _pack = null
 ## 世界节点。造东西要经过它 —— "造一个物体会发生什么"（登记 handle、监视碰撞、
 ## 发 entity.spawn）只有一份实现，在这里自己 add_child 会悄悄绕过那一份。
@@ -219,8 +223,11 @@ func impulse(handle: int, v: Vector3) -> bool:
 	return true
 
 
-## 染色。走的是每个刚体自己那份卡通材质，所以不会影响同网格的其它实例
-## （合批的静态实例共用一份材质，它们根本没有独立 handle）。
+## 染色。**只影响这一件**，不影响同网格、同配色的其它实例。
+##
+## 材质是按配色共用的（同色的东西共用一份），所以就地改色前必须先把
+## 共享的那份拆成私有的 —— 否则改一个箱子会把世界里所有同色箱子一起改了。
+## 拆分只发生在真的被染色的那几件身上，没染色的照旧共用。
 func tint(handle: int, color: Color) -> bool:
 	var b = _bodies.get(handle, null)
 	if b == null:
@@ -230,7 +237,10 @@ func tint(handle: int, color: Color) -> bool:
 		return false
 	var mat = mi.material_override
 	if mat is ShaderMaterial:
-		(mat as ShaderMaterial).set_shader_parameter("base_color", color)
+		var own: ShaderMaterial = MESH_LIB.unshare(mat as ShaderMaterial)
+		if own != mat:
+			mi.material_override = own
+		own.set_shader_parameter("base_color", color)
 		return true
 	return false
 

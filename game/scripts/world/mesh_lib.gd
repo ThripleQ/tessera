@@ -60,9 +60,26 @@ static func material() -> ShaderMaterial:
 	return _shared_material
 
 
-## 单独一份不共享的卡通材质，给玩家这类"要自己颜色"的独立网格用。
+## 单独一份卡通材质，按 (配色, 描边) **共用**。
+##
+## 以前这里是"每次都 new 一份"：一个刚体一份，一件静态物一份。23 个东西
+## 就是 23 份 ShaderMaterial —— 而它们的差别只有一个颜色参数。
+## 显卡那边每换一份材质就是一次状态切换，材质数直接决定提交的代价。
+##
+## 共用带来的唯一风险是**改色会波及同色的其它实例**，所以就地改色必须先走
+## `unshare()`（`api.tint` 已经这么做了）。这不是防御性代码：一个 mod 给
+## 自己的箱子染色，结果把所有木箱都染了，是最难被解释成"特性"的那种 bug。
+##
 ## outline <= 0 时连描边 pass 都不挂 —— 地板这种大面积平面加描边只会脏。
+static var _color_mats: Dictionary = {}
+static var _shared_ids: Dictionary = {}
+
+
 static func toon_material_for(color: Color, outline: float = 0.014) -> ShaderMaterial:
+	var key := "%d|%.4f" % [color.to_rgba32(), outline]
+	var hit = _color_mats.get(key, null)
+	if hit != null:
+		return hit
 	var m := ShaderMaterial.new()
 	m.shader = TOON_SHADER
 	m.set_shader_parameter("base_color", color)
@@ -71,7 +88,29 @@ static func toon_material_for(color: Color, outline: float = 0.014) -> ShaderMat
 		ol.shader = OUTLINE_SHADER
 		ol.set_shader_parameter("width", outline)
 		m.next_pass = ol
+	_color_mats[key] = m
+	_shared_ids[m.get_instance_id()] = true
 	return m
+
+
+## 要就地改这份材质之前先调它：共享的那份会被复制成私有的一份，其余照旧共用。
+##
+## 不复制就会变成"改一个，改一片"。复制是有代价的（这份材质不再和同色的东西
+## 共用状态），但只有真的被染色的那几件付这个代价 —— 而绝大多数东西一辈子不染色。
+static func unshare(mat: ShaderMaterial) -> ShaderMaterial:
+	if mat == null:
+		return null
+	if not _shared_ids.has(mat.get_instance_id()):
+		return mat
+	var copy := mat.duplicate() as ShaderMaterial
+	_shared_ids.erase(mat.get_instance_id())
+	return copy
+
+
+## 共享材质有几种。探针用它设回归红线：配色是有限的，材质数就该跟着配色走，
+## 而不是跟着物体数量走。
+static func shared_material_count() -> int:
+	return _color_mats.size()
 
 
 static func build(mesh_id: String) -> ArrayMesh:
