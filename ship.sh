@@ -61,7 +61,7 @@ fi
 
 # ---- 3. 等这一次推送的 CI -------------------------------------------------
 # 推送后 run 不会立刻出现，所以要轮询到"属于这个 sha 的那个 run"。
-say "等 CI（全套 16 步，约 30 秒）"
+say "等 CI（全套验收，约 30–45 秒）"
 run=""
 for _ in $(seq 1 20); do
     run="$(gh run list --limit 8 --json databaseId,headSha,workflowName \
@@ -84,5 +84,5 @@ if [ "$ok" -ne 0 ]; then
 fi
 
 # ---- 4. 收工 --------------------------------------------------------------
-printf '\033[32mCI 绿\033[0m —— 十六步全套通过（%s 秒）\n' "$SECONDS"
+printf '\033[32mCI 绿\033[0m —— 全套验收通过（%s 秒）\n' "$SECONDS"
 echo "run: https://github.com/ThripleQ/tessera/actions/runs/$run"
