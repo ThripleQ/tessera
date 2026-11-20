@@ -8,7 +8,41 @@ cd "$(dirname "$0")"
 GODOT="${GODOT:-tools-bin/Godot_v4.6-stable_linux.x86_64}"
 export GODOT_SILENCE_ROOT_WARNING=1
 fail=0
-step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+# 每步耗时打在标题上方：慢的时候要能一眼看出是"引擎起不来"还是"某一步在跑物理"，
+# 而不是对着一整屏绿猜。
+step() {
+    if [ -n "${_last:-}" ]; then
+        printf '\033[2m   （上一步 %s 秒）\033[0m' "$((SECONDS - _last))"
+        echo
+    fi
+    _last=$SECONDS
+    printf '\n\033[1m== %s ==\033[0m\n' "$1"
+}
+
+# ---- 切片模式：只为"改一处、等十秒"存在 ----------------------------------
+#
+# `./check.sh 14` 只跑第 14 步（外加 1/3/4 这三个便宜且是前提的步骤）。
+# 全套 16 步约 100 秒，其中 12 步各自冷启动一次引擎；改一行角色代码要等两分钟，
+# 于是"顺手也跑一遍"变成"懒得跑"，或者反过来"跑一次就以为验完了"。
+#
+# 它守不住的东西必须说在明处：切片只证明**那一步**是对的，不证明别的步骤没被
+# 碰坏。所以它永不打印"验收通过"，CI 里被硬拒绝（CI 跑的永远是全套），
+# 提交前也必须跑一次全套 —— 这条写进 AGENTS。
+only="${*:-}"
+slice=0
+[ -n "$only" ] && slice=1
+if [ "$slice" = 1 ] && [ -n "${CI:-}" ]; then
+    printf '\033[31m拒绝\033[0m：CI 里不许切片，验收必须跑全套\n'
+    exit 1
+fi
+want() {   # $1=步号；返回 0 = 该跑
+    [ "$slice" = 0 ] && return 0
+    case " $only " in *" $1 "*) return 0 ;; esac
+    # 编译内容 / 架构纪律 / 同步产物：便宜，且后面每一步都依赖它们
+    case " 1 3 4 " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+skip() { printf '\033[2m   （切片模式，跳过 %s）\033[0m\n' "$1"; }
 
 # 引擎自己的报错一律算失败。
 #
@@ -34,6 +68,7 @@ no_engine_errors() {   # $1=输出  $2=步骤名
 mkdir -p build
 
 step "1/16 编译基础内容（解析 → 继承 → 校验 → 产物）"
+if want 1; then
 # 先验证编译器本身没退化成"永远接受"，再编译真内容。
 # 一个从来没拒绝过东西的校验器，和不存在没有区别 —— 而且它还是绿的。
 if out=$(python3 tools/contentc.py --selftest 2>&1); then
@@ -45,7 +80,11 @@ fi
 python3 tools/contentc.py --content content \
     --out build/content.pack.json --bin build/content.pack.bin --report || fail=1
 
+else
+    skip 1
+fi
 step "2/16 编译每个 mod（各自独立产物）"
+if want 2; then
 # mod 是可独立发布的单元，所以它有自己的一步编译。这里不合并成一个包：
 # 合并是运行时的事（按授权顺序叠加），编译期合并会让"谁覆盖了谁"变得不可见。
 for d in mods/*/; do
@@ -53,7 +92,11 @@ for d in mods/*/; do
     python3 tools/contentc.py --mod "$d" --base content || fail=1
 done
 
+else
+    skip 2
+fi
 step "3/16 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
+if want 3; then
 # 先验证检查器本身没退化成"永远通过"，再跑真正的检查。
 if python3 tools/lint_arch.py --selftest > build/lint_selftest.log 2>&1; then
     echo "检查器自测：通过（R1-R7 每条都能抓到违规）"
@@ -63,7 +106,11 @@ else
 fi
 python3 tools/lint_arch.py || fail=1
 
+else
+    skip 3
+fi
 step "4/16 同步内容包到 Godot 工程"
+if want 4; then
 cp build/content.pack.json game/content.pack.json || fail=1
 
 # 行为 mod 的源码是运行时从磁盘编译的，根目录得显式给 —— 否则 CI 里找不到文件，
@@ -78,7 +125,11 @@ if [ ! -x "$GODOT" ]; then
     exit 1
 fi
 
+else
+    skip 4
+fi
 step "5/16 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
+if want 5; then
 # --trust=all：验收必须真的跑到脚本通道。不授权的话带脚本的 mod 会被
 # 授权闸门挡住，自检发现"一个脚本都没加载"就判失败 —— 那种绿毫无意义。
 #
@@ -92,7 +143,11 @@ if ! echo "$out" | grep -q '自检通过'; then
     fail=1
 fi
 
+else
+    skip 5
+fi
 step "6/16 系统层（怪会动 → 会死 → 会掉）"
+if want 6; then
 # `move` / `ai` / `health` / `loot` 在此之前是死数据：契约声明了、内容填了、
 # 引擎一行都没读。菜单里的"骨行者"放下去是个雕像。
 # 四条断言各守各的：是刚体（能抓能扔）、会动（系统写了速度）、
@@ -111,7 +166,11 @@ if ! echo "$out" | grep -q 'ACTOR RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 6
+fi
 step "7/16 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
+if want 7; then
 # 这一项必须真跑。自检只走到 Plan 层，不实例化玩家、不跑物理，
 # 所以坐标编码、刚体重建、handle 作废全在它的覆盖之外 ——
 # 而这类代码的错法是"看起来存了，读回来差一点"，只有对比数字能发现。
@@ -126,7 +185,11 @@ if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物
     fail=1
 fi
 
+else
+    skip 7
+fi
 step "8/16 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
+if want 8; then
 # 菜单是纯运行时 UI，自检一个节点都不建。它坏起来很安静：
 # "能打开但点了没反应"、"关掉之后操作还卡着"，两种都不报错。
 # 收 / 放回 / 堆叠也在这里验：预算归还、库存扣减、堆叠上限、
@@ -144,7 +207,11 @@ if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 8
+fi
 step "9/16 剔除（逐件判过）与性能成本（结构指标，不设毫秒断言）"
+if want 9; then
 # 剔除坏起来不报错：该剔的没剔只是帧时慢慢涨，剔多了玩家只看到世界在闪。
 # 所以它必须有断言 —— 而且要测两条**不同**的路：
 # 距离（远处那件）和视锥（侧面那件）。只测远处的话，视锥写坏也发现不了，
@@ -173,7 +240,11 @@ out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/perf.gd 
 echo "$out" | grep -E '^(PERF)'
 no_engine_errors "$out" "剔除与性能成本" || fail=1
 
+else
+    skip 9
+fi
 step "10/16 L4 扩展（mod 自带组件 / 系统 / 规则状态 / 权限边界）"
+if want 10; then
 # 这一项必须真的跑一个 mod 系统：自检只到 Plan 层，调度器一个节点都不建。
 # 四条断言各守各的 —— 声明进 schema、脚本编译进调度器、固定节拍写了状态、
 # 没声明的读写与错类型值被挡住。最后一条尤其重要：开放不等于把节点交出去。
@@ -186,7 +257,11 @@ if ! echo "$out" | grep -q 'EXT RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 10
+fi
 step "11/16 外观开放（文件夹里的模型真的盖掉引擎内置几何）"
+if want 11; then
 # 这一项必须真的加载一份外部 glTF：自检只到 Plan 层，看不见"换外貌"这件事。
 # 断言各守各的 —— 覆盖被发现、三角形数与内置不同、世界里刚体的视觉网格
 # **就是**资源层给出的那个对象（漏改一个调用点就会红）、回退与优先级有边界。
@@ -199,7 +274,11 @@ if ! echo "$out" | grep -q 'ASSET RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 11
+fi
 step "12/16 真实玩法扩展（agent 新增 mod 能改变物理世界）"
+if want 12; then
 # 前面只证明 L4 通道“能装载、能写自己的状态”；这一步证明它能做出真实玩法：
 # 一个只走公开契约、脚本与 api 的 mod，按固定节拍推开附近任意刚体。
 # 探针不认识内容 id，只按组件语义找机关与目标，因此以后 agent 再加刚体也能参与。
@@ -212,7 +291,11 @@ if ! echo "$out" | grep -q 'RULE RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 12
+fi
 step "13/16 性能结构（材质共用 / 染色隔离 / 视锥每帧一次 / 剔除变快 / 无孤儿）"
+if want 13; then
 # 这一步守的是**结构**，不是毫秒。这台机器没有 GPU，无头主循环自己就有
 # ~6.8 ms 的地板（空场景实测），墙上帧时测不出 1 ms 级差别 ——
 # 项目之前把那个数字当基线追了好几轮，实际上一直在测环境。
@@ -227,7 +310,11 @@ if ! echo "$out" | grep -q 'BUDGET RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 13
+fi
 step "14/16 角色资产（带动画的人 / 脚贴地 / 卡通材质 / 能回退 / 骨骼真的在动 / 目录里每个角色）"
+if want 14; then
 # 这一轮之前，玩家是一坨"会平移的几何"：功能全对，动画全无。
 # 所以这一步守的不是模型好不好看，而是**人是不是真的在动** ——
 # 直接采样骨骼姿势跨帧比较，而不是看 AnimationPlayer 当前播的片段名。
@@ -246,7 +333,11 @@ if ! echo "$out" | grep -q 'CHAR RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 14
+fi
 step "15/16 步态匹配（档位由资产声明 / 速度带无缝 / 支撑脚不打滑 / 有牙）"
+if want 15; then
 # 这一轮之前，人是"腿在迈、身体在冰上滑"：4.6 m/s 的速度配着画到 0.55 m/s 的动画。
 # 这一步守的是**位移对账**：支撑脚相对身体的后撤速率必须等于身体速度，
 # 差值就是脚在世界里真实滑动的速度。
@@ -262,7 +353,11 @@ if ! echo "$out" | grep -q 'LOCO RESULT OK'; then
     fail=1
 fi
 
+else
+    skip 15
+fi
 step "16/16 世界里的人（新丢一个 glb 就多一个人 / 同一份资产能要两次 / 真的在走）"
+if want 16; then
 # 第 14 步证明的是"拿得起来"：把每个角色单独建成玩家的样子体检一遍。
 # 这一步证明的是"放进世界里还能走"—— 那是另一条链：
 # character_assets → character_rig → gait → 物理 → 动画。
@@ -288,4 +383,12 @@ if [ "$fail" -ne 0 ]; then
     printf '\033[31m验收失败\033[0m\n'
     exit 1
 fi
+if [ "$slice" = 1 ]; then
+    printf '\033[33m切片通过\033[0m —— 只跑了 %s 步，这不代表可以提交。提交前跑一次 ./check.sh\n' "$only"
+    exit 0
+fi
 printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、怪会动会死会掉、存档能往返、菜单能生成、剔除判得对、L4 扩展能装载能跑且有边界、外观开放能换几何、真实玩法能只靠公开扩展通道、性能结构不退化、角色带骨骼动画且脚贴地、目录里每个角色都能用、走跑时支撑脚不打滑、世界里的别人真的在走、引擎无报错\n'
+
+else
+    skip 16
+fi
