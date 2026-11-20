@@ -12,8 +12,13 @@ extends CharacterBody3D
 
 const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+const RIG = preload("res://scripts/player/character_rig.gd")
 const HANDS = preload("res://scripts/player/hands.gd")
 const BAG = preload("res://scripts/player/bag.gd")
+
+## 玩家用哪个角色资产。这个名字就是 `assets/characters/` 下的文件名。
+## 换角色只改这一行 —— 不用碰骨架、动画、材质，那些都在资产层归一化好了。
+const CHARACTER_ID := "knight"
 
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 8.2
@@ -50,6 +55,7 @@ var _captured := false
 var _arm: SpringArm3D
 var _camera: Camera3D
 var _visual: Node3D
+var _rig
 var _hands
 var _bag
 
@@ -98,25 +104,17 @@ func _ready() -> void:
 	_visual = Node3D.new()
 	_visual.name = "visual"
 	add_child(_visual)
-	var mesh := MeshInstance3D.new()
-	mesh.mesh = ASSETS.mesh("player_lowpoly")
-	mesh.material_override = MESH_LIB.toon_material_for(PLAYER_COLOR, 0.013)
-	_visual.add_child(mesh)
 
-	# 眼睛。听上去是个无关紧要的细节，但它决定了"这是一坨人形"还是"这是个角色"：
-	# 动漫风的脸全靠眼睛定位，没有它，再准的头身比也只是一根柱子。
-	# 用 unshaded 纯色块，因为眼睛不该参与光照计算 —— 它本来就是个符号。
-	var eye_mat := StandardMaterial3D.new()
-	eye_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	eye_mat.albedo_color = EYE_COLOR
-	for side in [-1.0, 1.0]:
-		var eye := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = Vector3(0.062, 0.082, 0.022)
-		eye.mesh = box
-		eye.material_override = eye_mat
-		eye.position = Vector3(side * 0.055, 1.548, -0.128)
-		_visual.add_child(eye)
+	# 外观：先试带动画的角色资产，拿不到就退回程序化几何。
+	# 这条回退不是防御性代码 —— 资产目录是可以整个删掉的，删掉之后游戏
+	# 必须还能跑，哪怕人重新变成一个会滑的方块。装不上就满屏空白，比没有更糟。
+	_rig = RIG.new()
+	_rig.name = "rig"
+	_visual.add_child(_rig)
+	if _rig.setup(CHARACTER_ID, PLAYER_COLOR, EYE_COLOR):
+		print("玩家外观：%s（%d 个动画片段）" % [CHARACTER_ID, _rig.clip_count()])
+	else:
+		print("玩家外观：角色 `%s` 用不了，退回内置几何" % CHARACTER_ID)
 
 	var head := Node3D.new()
 	head.name = "head"
@@ -219,6 +217,10 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_push_bodies(delta)
+	# 动画跟着**真实速度**走，不跟着输入走。用输入意图判会出现那种穿帮：
+	# 贴着墙按 W，腿在跑、人没动。而被箱子推着走的时候，腿也该迈。
+	var flat_speed := Vector2(velocity.x, velocity.z).length()
+	_rig.update_locomotion(flat_speed, is_on_floor(), velocity.y, delta)
 	# 抓取在 move_and_slide 之后跑：手上的东西永远以"玩家已经落到哪儿"为准，
 	# 而不是以玩家上一帧的位置为准。
 	_hands.update(delta)

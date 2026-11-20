@@ -22,6 +22,7 @@ const SPAWN_MENU = preload("res://scripts/ui/spawn_menu.gd")
 const RETICLE = preload("res://scripts/ui/reticle.gd")
 const SYSTEMS = preload("res://scripts/systems/runner.gd")
 const ASSETS = preload("res://scripts/world/assets.gd")
+const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
 const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
@@ -75,6 +76,9 @@ func _ready() -> void:
 	# 授权闸门要么全开要么全关，半开等于绕过去。
 	ASSETS.configure(mod_units, pack)
 	print(ASSETS.summary())
+	# 角色是另一层资产（带动画的树），摘要分开打印 ——
+	# 玩家换成什么、有几个片段，开局第一屏就该看得见。
+	print(CHARACTER_ASSETS.character_summary())
 
 	plan = PLAN_SCRIPT.new()
 	plan.build(pack)

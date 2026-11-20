@@ -23,6 +23,10 @@ const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const ASSET_SUBDIR := "assets/meshes"
 const MESH_EXTS: Array[String] = ["gltf", "glb"]
 
+## 角色资产（带动画的整棵树）在同域的 `character_assets.gd` 里 ——
+## 那是另一件事：一份是静态几何，一份是骨架加片段。混在一个文件里会破 400 行上限，
+## 而且会让"换个模型"和"换套动画"看起来像同一个动作。
+
 ## 静态而不是实例：调用点（plan / chunk / world_root / solids / player / 探针）
 ## 原来都是 `MESH_LIB.build()` 这样的静态调用，换成 `ASSETS.mesh()` 最小改动，
 ## 也避免把资源层一路注入到五六个类里。
@@ -141,6 +145,20 @@ static func problems() -> Array[String]:
 	return _problems.duplicate()
 
 
+## 让同域的角色资产把问题记到同一本账上。
+##
+## 自检只读 `problems()` 一处；如果角色层自己攒一本，"角色加载失败"就会
+## 从自检里静默消失 —— 而这类失败的症状恰好是"人变回一个方块"，很容易被当成正常。
+static func note_problem(msg: String) -> void:
+	_problems.append(msg)
+
+
+## 卡通材质的统一出口。别的域不该为了拿一份材质去 preload mesh_lib ——
+## 那会让"材质从哪来"出现第二个真相，也会绕开材质共用表。
+static func toon_material(color: Color, outline: float = 0.014) -> ShaderMaterial:
+	return MESH_LIB.toon_material_for(color, outline)
+
+
 static func configured() -> bool:
 	return _configured
 
@@ -203,3 +221,4 @@ static func _append_tree(node: Node, parent_xform: Transform3D, st: SurfaceTool)
 				st.append_from(src, s, xf)
 	for child in node.get_children():
 		_append_tree(child, xf, st)
+

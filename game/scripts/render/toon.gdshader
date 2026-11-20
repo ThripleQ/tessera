@@ -12,6 +12,13 @@ render_mode blend_mix, depth_draw_opaque, cull_back, specular_disabled;
 
 uniform vec4 base_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
+// 可选贴图。现成资产（KayKit 之类）靠一张渐变图集上色，换成纯色就会丢掉
+// 所有细节；但程序化几何没有 UV 语义，强行采样只会是噪点。
+// 所以做成开关：默认关，资产加载器在拿到贴图时打开。
+// 用乘法而不是替换，是因为 base_color 仍然要能给它染色（受击泛红之类）。
+uniform sampler2D albedo_tex : source_color, hint_default_white;
+uniform bool use_albedo_tex = false;
+
 // 明暗分界的阈值。越大暗部越多。
 uniform float shade_threshold : hint_range(0.0, 1.0) = 0.34;
 // 分界的柔度。0 = 硬边（纯卡通），稍大一点能避免锯齿闪动。
@@ -39,6 +46,9 @@ void fragment() {
 	// 不做这个兜底，凡是没有顶点色的独立网格都会变成一块黑。
 	if (length(COLOR.rgb) < 0.001) {
 		tint = base_color.rgb;
+	}
+	if (use_albedo_tex) {
+		tint *= texture(albedo_tex, UV).rgb;
 	}
 	ALBEDO = tint;
 	ROUGHNESS = 1.0;

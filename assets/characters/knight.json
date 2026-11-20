@@ -1,0 +1,4 @@
+{
+  "note": "KayKit 的 Adventurers 角色包把全部武器与盾牌都绑在同一个骨架上，一加载就是五把武器四张盾。这里只按名字前缀隐藏，不涉及具体文件名。",
+  "hide_prefix": ["1H_", "2H_", "Badge_", "Rectangle_", "Round_", "Spike_"]
+}
