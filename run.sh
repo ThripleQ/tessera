@@ -38,7 +38,7 @@ game_args=""
 godot_args=""
 for a in "$@"; do
     case "$a" in
-        --trust=*|--selftest|--fresh) game_args="$game_args $a" ;;
+        --trust=*|--selftest|--resume|--weapon=*) game_args="$game_args $a" ;;
         *) godot_args="$godot_args $a" ;;
     esac
 done
@@ -49,7 +49,10 @@ export TESSERA_ROOT="$(pwd)"
 
 echo
 echo "启动 —— 鼠标转视角，WASD 走，空格跳，Shift 冲刺"
-echo "       左键按住抓起东西，松开扔出去；R 轻轻放下；Esc 释放鼠标"
+echo "       左键开火（第一人称）；R 换弹；V 切换第一/第三人称"
+echo "       第三人称：左键抓起东西、松开扔出去，R 轻轻放下"
+echo "       Tab 生成菜单，右键收进背包，F8 换角色，Esc 释放鼠标"
+echo "       默认干净开局；接着上次玩：--resume"
 echo
 # shellcheck disable=SC2086
 exec "$GODOT" --path game $godot_args -- $game_args

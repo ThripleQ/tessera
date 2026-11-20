@@ -36,6 +36,9 @@ var api = null
 var _camera: Camera3D = null
 var _rooms_with_rigid: Array[String] = []
 var _speeds: Dictionary = {}
+## 内容点名的开局房间（`room.start = true`）。多个都点了时按 id 取第一个，
+## 于是结果确定 —— "同一个存档两台机器开场位置不同"是最难复现的一类。
+var _start_room := ""
 
 ## 上一帧的剔除结果。给探针读 —— "该剔的剔了吗"必须能被断言，
 ## 否则剔除退化成"什么都不剔"时，验收照样全绿，只是帧时慢慢涨。
@@ -90,6 +93,9 @@ func realize(plan) -> void:
 		var floor_origin := Vector3(room["bounds"].position.x, 0.0, room["bounds"].position.z)
 		chunk.add_child(SOLIDS.make_floor(floor_origin, room["floor_size"]))
 		chunks[room_id] = chunk
+		if bool(room.get("start", false)):
+			if _start_room.is_empty() or String(room_id) < _start_room:
+				_start_room = String(room_id)
 
 
 func _register_body(rb: RigidBody3D, item: Dictionary) -> void:
@@ -252,14 +258,28 @@ func remove_thing(node: Node) -> String:
 	return pid
 
 
-## 开场该站在哪。优先选有刚体的房间 —— 玩家第一眼就该看到"东西会动"，
-## 否则他会以为这还是一片静态布景。
+## 开场该站在哪。**内容点名的开局房间优先**（`room.start = true`）——
+## 没有它的时候才退回"第一个有刚体的房间"，那是给只有测试内容的旧世界留的路。
 func start_bounds() -> AABB:
+	if not _start_room.is_empty() and chunks.has(_start_room):
+		return chunks[_start_room].bounds
 	if not _rooms_with_rigid.is_empty():
 		return chunks[_rooms_with_rigid[0]].bounds
 	for room_id in chunks:
 		return chunks[room_id].bounds
 	return AABB(Vector3.ZERO, Vector3(24, 6, 24))
+
+
+## "别人"（NPC）该待在哪个房间。**首选不是开局房间的那一间** ——
+## 训练场里站着几个打不动的路人会挡住枪线，而且很难跟玩家解释他们是谁。
+## 没有别的房间时退回开局房间：世界只剩一间也得有人，第 16 步验的就是这个。
+func cast_bounds() -> AABB:
+	var ids: Array = chunks.keys()
+	ids.sort()
+	for room_id in ids:
+		if String(room_id) != _start_room:
+			return chunks[room_id].bounds
+	return start_bounds()
 
 
 ## 世界底板。房间之间留了走道，没有它就是一块块悬空的平台露出天空。

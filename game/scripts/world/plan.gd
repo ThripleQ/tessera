@@ -38,6 +38,9 @@ func build(pack) -> void:
 			"room_id": room_id,
 			"bounds": AABB(origin, Vector3(size_x, 6.0, size_z)),
 			"floor_size": Vector2(size_x, size_z),
+			# 开局房间由内容点名（`room.start`），不由 id 排序猜。
+			# 猜的后果是"把训练场改名，玩家就开场掉在墓厅里"。
+			"start": bool(room_comp.get("start", false)),
 			"items": [],
 		}
 		_fill_room(room, pack, room_id, comps, origin, Vector2(size_x, size_z))

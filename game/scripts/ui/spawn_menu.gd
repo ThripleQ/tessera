@@ -119,7 +119,7 @@ func _build() -> void:
 	# 而"能放东西"是这个产品目前唯一还没兑现的承诺。
 	_hint = Label.new()
 	_hint.name = "hint"
-	_hint.text = "Tab  生成菜单　　右键 收进背包　　F8 换角色　　F5 存档　　F9 读档"
+	_hint.text = "左键 开火 / 抓取　　R 换弹 / 放下　　V 视角　　Tab 生成菜单　　右键 收进背包　　F8 换角色　　F5 存档　　F9 读档"
 	_hint.add_theme_font_size_override("font_size", 15)
 	_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	_hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))

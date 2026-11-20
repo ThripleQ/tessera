@@ -16,15 +16,18 @@ const PLAYER_SCRIPT = preload("res://scripts/player/player.gd")
 const BUS_SCRIPT = preload("res://scripts/hooks/bus.gd")
 const API_SCRIPT = preload("res://scripts/hooks/api.gd")
 const LOADER = preload("res://scripts/mods/loader.gd")
-const REGISTRY = preload("res://scripts/mods/registry.gd")
+const MOUNT = preload("res://scripts/mods/mount.gd")
 const SAVE = preload("res://scripts/save/store.gd")
 const SPAWN_MENU = preload("res://scripts/ui/spawn_menu.gd")
 const RETICLE = preload("res://scripts/ui/reticle.gd")
+const CROSSHAIR = preload("res://scripts/ui/crosshair.gd")
 const SYSTEMS = preload("res://scripts/systems/runner.gd")
 const ASSETS = preload("res://scripts/world/assets.gd")
 const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
 const SKYLIGHT = preload("res://scripts/world/skylight.gd")
 const NPC = preload("res://scripts/player/npc.gd")
+const GUN = preload("res://scripts/player/gun.gd")
+const HUD = preload("res://scripts/ui/hud.gd")
 const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
@@ -115,91 +118,12 @@ func _ready() -> void:
 	_setup_scene()
 
 
-## 发现 → 授权 → 合并。三步都"先看清楚，再动手"。
-##
-## 合并放在这里而不是 registry 里，是因为它要动 pack 对象 ——
-## registry 只回答"谁能进来"，不该拥有修改世界的权力。
+## 发现 → 授权 → 合并，全在 `mods/mount.gd` 里。入口只接收结果 ——
+## 装配顺序是入口的职责，判定规则不是。
 func _mount_mods(args: PackedStringArray) -> void:
-	var found := REGISTRY.discover(LOADER.search_paths())
-	_apply_trust(args, found["candidates"])
-
-	var resolved := REGISTRY.resolve(found, REGISTRY.load_settings())
-	for e in resolved["errors"]:
-		printerr("mod 扫描失败：%s" % e)
-	for w in resolved["warnings"]:
-		print("mod 提示：%s" % w)
-
-	for cand in resolved["blocked"]:
-		printerr("mod `%s` 未授权：它带可执行代码，而 Godot 没有 GDScript 沙箱（ADR 0003）。"
-			% cand["id"])
-		printerr("  信任它就跑一次： ./run.sh --trust=%s" % cand["id"])
-
-	var units: Array[Dictionary] = []
-	for cand in resolved["enabled"]:
-		# 扩展声明必须先并进 schema，再校验内容 —— 否则 mod 自带的
-		# `[components.<新组件>]` 会被当成「契约里没有的组件」。
-		var ext: Dictionary = cand.get("extensions", {})
-		var problems: Array[String] = pack.apply_extension(ext, String(cand["id"]))
-		problems.append_array(pack.validate_entities(cand["entities"]))
-		if not problems.is_empty():
-			for p in problems:
-				printerr("mod `%s` 被拒绝：%s" % [cand["id"], p])
-			continue
-		var merged: Dictionary = pack.merge_entities(cand["entities"])
-		var overwritten: Array = merged["overwritten"]
-		var note := "%s[%s] %d 条" % [cand["id"], cand["level"], merged["merged"]]
-		var ext_comps: Dictionary = ext.get("components", {})
-		var ext_systems: Dictionary = ext.get("systems", {})
-		if not ext_comps.is_empty() or not ext_systems.is_empty():
-			note += "，扩展 %d 组件 / %d 系统" % [ext_comps.size(), ext_systems.size()]
-		if not overwritten.is_empty():
-			note += "，覆写 %d 条（%s）" % [overwritten.size(), ", ".join(overwritten)]
-		print("mod 合并：%s" % note)
-		units.append(cand)
-
-	mod_units = units
-	mod_blocked = resolved["blocked"].size()
-	print(REGISTRY.describe(resolved))
-
-
-## 显式授权。没有 UI 之前，命令行就是那道开关 —— 而且它比 UI 更诚实：
-## 玩家必须自己敲出这个 mod 的 id，不能靠一路点"下一步"过去。
-func _apply_trust(args: PackedStringArray, candidates: Array) -> void:
-	var ids: Array[String] = []
-	for a in args:
-		var arg := String(a)
-		if not arg.begins_with("--trust="):
-			continue
-		var id := arg.trim_prefix("--trust=")
-		if id == "all":
-			# 只在明说的情况下才全信任，而且照样逐个记进名单 ——
-			# 下次不给这个参数时，授权依然有效，因为它们是具体的 id。
-			for c in candidates:
-				if c["level"] == "script":
-					ids.append(String(c["id"]))
-			continue
-		var hit := false
-		for c in candidates:
-			if String(c["id"]) == id:
-				hit = true
-		if not hit:
-			printerr("--trust=%s：没有这个 mod（现有：%s）"
-				% [id, ", ".join(_mod_ids(candidates))])
-			continue
-		ids.append(id)
-
-	if ids.is_empty():
-		return
-	if REGISTRY.trust(ids):
-		print("已授权：%s（记在 %s，下次不用再给这个参数）"
-			% [", ".join(ids), REGISTRY.SETTINGS_PATH])
-
-
-func _mod_ids(candidates: Array) -> Array[String]:
-	var out: Array[String] = []
-	for c in candidates:
-		out.append(String(c["id"]))
-	return out
+	var mounted := MOUNT.run(pack, args)
+	mod_units = mounted["units"]
+	mod_blocked = int(mounted["blocked"])
 
 
 ## 场景组装：天光 + 世界 + 人 + 玩家。全部是引擎的"怎么跑"。
@@ -234,6 +158,10 @@ func _setup_scene() -> void:
 	_systems = SYSTEMS.new()
 	_systems.setup(_world, _player, api, bus, pack, mods.get("systems", []))
 
+	# 枪必须在系统层之后：它往血量系统递伤害，而血量系统是系统层建的。
+	# 也不能更早 —— 那就要把 vitals 变成"先建好再注入"，多一层没人需要的间接。
+	_wire_gun()
+
 	# 菜单要在玩家之后建：它要接管玩家输入。
 	var menu = SPAWN_MENU.new()
 	menu.name = "spawn_menu"
@@ -256,14 +184,22 @@ func _setup_scene() -> void:
 	var reticle = RETICLE.new()
 	reticle.name = "reticle"
 	reticle.hands = _player.hands()
+	reticle.player = _player
 	add_child(reticle)
 
-	# 读档必须在世界和玩家都已就位之后：它要替换整个世界里的刚体，
-	# 并把玩家挪回上次站的地方。
-	if "--fresh" in OS.get_cmdline_user_args():
-		print("跳过读档（--fresh）")
-	else:
+	# 第一人称的准心。它和上面那个落点圈是两件事，见 crosshair.gd 开头。
+	var cross = CROSSHAIR.new()
+	cross.name = "crosshair"
+	cross.player = _player
+	add_child(cross)
+
+	# 读档：**默认不读**。训练场每次打开都该是干净的 —— 上一局打剩的三只骷髅
+	# 和一地掉落，会让"我打了多久、准不准"这件事没法比较。
+	# 想接着上次玩就显式给 --resume；关窗口时的自动存档仍然在写。
+	if "--resume" in OS.get_cmdline_user_args():
 		_resume()
+	else:
+		print("干净开局（默认）。接着上次玩：./run.sh --resume")
 
 	# 世界就绪：刚体已全部生成，玩家已就位。mod 在这里做一次性初始化。
 	bus.emit("world.ready", {
@@ -271,6 +207,48 @@ func _setup_scene() -> void:
 		"entities": plan.instance_count(),
 		"player_pos": _player.global_position,
 	})
+
+
+## 给玩家一把枪，并把屏幕上的读数接上。
+##
+## 用哪把枪由内容决定：`kind = "weapon"` 的内容里按 id 排序取第一把，
+## 命令行 `--weapon=<id>` 可以指定。引擎不认识 "rifle" 这个名字 ——
+## 加一把新枪只需要写一个 TOML（铁律 1/2）。
+func _wire_gun() -> void:
+	var weapon := _pick_weapon()
+	if weapon.is_empty():
+		print("没有找到任何 weapon 内容 —— 这次没有枪")
+		return
+	var gun = GUN.new()
+	# vitals 是系统层建的，这里只是把引用递过去 —— 枪不知道它住在哪。
+	if not gun.setup(_player, _player.camera(), pack, weapon, _systems.vitals()):
+		printerr("武器 `%s` 装不上，这次没有枪" % weapon)
+		return
+	_player.attach_gun(gun)
+	print("手里的枪：%s（伤害 %d / 射速 %.1f 发秒 / 弹匣 %d / 射程 %.0f m）"
+		% [weapon, gun.damage, 1.0 / gun.interval, gun.mag_size, gun.reach])
+
+	var hud = HUD.new()
+	hud.name = "hud"
+	hud.gun = gun
+	hud.vitals = _systems.vitals()
+	add_child(hud)
+
+
+## 挑一把枪。名单来自内容，不来自常量 —— 这一行就是"武器也是数据"。
+func _pick_weapon() -> String:
+	var ids: PackedStringArray = pack.ids_of_kind("weapon")
+	if ids.is_empty():
+		return ""
+	for a in OS.get_cmdline_user_args():
+		var arg := String(a)
+		if not arg.begins_with("--weapon="):
+			continue
+		var want := arg.trim_prefix("--weapon=")
+		if ids.has(want):
+			return want
+		printerr("--weapon=%s：内容里没有这把枪（现有：%s）" % [want, ", ".join(ids)])
+	return String(ids[0])
 
 
 ## 读档。读不出来时**不能**当成"没有存档"——那会让玩家以为世界丢了，
@@ -359,7 +337,9 @@ func _process(delta: float) -> void:
 ## 上限 4 个：这一层是"世界里有人"，不是"人山人海的场景"。
 ## 真的要做人群，那是另一件事（合批、剔除、行为），不该顺手做掉。
 func _add_cast() -> void:
-	var b: AABB = _world.start_bounds()
+	# 别人待在别的房间。训练场是打枪的地方，站着几个打不动的路人
+	# 会挡住枪线，而"他们为什么不还手"是个回答不了的问题。
+	var b: AABB = _world.cast_bounds()
 	var center := Vector3(b.get_center().x, 0.0, b.get_center().z)
 	var radius := clampf(minf(b.size.x, b.size.z) * 0.25, 1.8, 4.5)
 	var room := Node3D.new()

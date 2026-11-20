@@ -33,12 +33,39 @@ var api = null
 var bus = null
 var pack = null
 
+## 这一局死了几只。给 HUD 看，也给探针看 —— "会死"早就验过了，
+## "死了几只有没有被记下来"是另一件事。
+var kills := 0
+
 
 func setup(w, a, b, pk) -> void:
 	world = w
 	api = a
 	bus = b
 	pack = pk
+
+
+## 从**非撞击**来的伤害入口：枪的射线打中之后走这里。
+##
+## 为什么需要它：`step()` 只认 `world.impacts`（物理撞击），而子弹不是物理体 ——
+## 它是一条射线。硬把射线塞进 impacts 会让"撞击"这个概念既指 8 m/s 的箱子，
+## 又指一发光，而它们的速度、来源、过滤规则全不一样。
+##
+## 返回 `{ok, hp}`：ok=false 表示"这东西不会疼"（墙、地板、没血量的箱子）。
+## 调用方据此决定准星要不要亮、计数要不要加 —— 引擎不替它判断"这是不是敌人"。
+func damage(node, amount: int) -> Dictionary:
+	if node == null or not is_instance_valid(node):
+		return {"ok": false}
+	if not (node is RigidBody3D):
+		return {"ok": false}
+	if amount <= 0:
+		return {"ok": false}
+	var rb := node as RigidBody3D
+	var comps: Dictionary = pack.components_of(String(rb.get_meta("content_id", "")))
+	if not comps.has("health"):
+		return {"ok": false}
+	_hurt(rb, amount)
+	return {"ok": true, "hp": _hp_of(rb, comps)}
 
 
 func step(dt: float) -> void:
@@ -110,6 +137,7 @@ func _die(rb: RigidBody3D) -> void:
 	var cid := String(rb.get_meta("content_id", ""))
 	var comps: Dictionary = pack.components_of(cid)
 	var at: Vector3 = rb.global_position
+	kills += 1
 	_drop_loot(comps, at)
 	world.remove_thing(rb)
 

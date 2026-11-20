@@ -176,11 +176,13 @@ patch 之后的最终值。
 
 **契约说世界能有什么，实现清单说引擎现在能处理什么，两者之差就是待办。**
 
-当前：**13 个内置组件**，基础内容用到 12 个，引擎真正**读**了 9 个
-（`model` 的几何与配色、`collider` 的碰撞与刚体、`spawner` 的房间填充、`room` 的尺寸、
-`pickup` 的堆叠上限与价值、`move` 的速度与游荡、`ai` 的脑回路与仇恨半径、
-`health` 的血量与回血、`loot` 的掉落表与概率）。其余 4 个（`light` / `interaction` /
-`wieldable` / `transform`）还是一行数据。这个缺口不会自己消失。
+当前：**13 个内置组件**，基础内容用到 12 个，引擎真正**读**了 10 个
+（`model` 的几何与配色、`collider` 的碰撞与刚体、`spawner` 的房间填充、`room` 的尺寸
+与 `start` 开局标记、`pickup` 的堆叠上限与价值、`move` 的速度与游荡、`ai` 的脑回路与仇恨半径、
+`health` 的血量与回血、`loot` 的掉落表与概率，以及第十八轮接上的 `wieldable`：
+伤害 / 射速 / 弹匣 / 换弹 / 散布 / 后坐 / 连发 / 音效全部由 `content/weapon/*.toml`
+交给 `gun.gd`）。其余 3 个（`light` / `interaction` / `transform`）还是一行数据。
+这个缺口不会自己消失。
 **L4 的自定义组件不算在这 13 个里**：它由声明它的 mod 系统自己读，
 `mods/l4_demo` 的 `pulse` 就是那个「第一次由外部声明、被引擎按数据校验」的样品。
 
@@ -188,6 +190,14 @@ patch 之后的最终值。
 `move` + `ai` 写速度，`vitals` 读 `health` + `loot` 结算受伤 / 死亡 / 掉落。
 两个系统**不许互相认识**，只通过组件交流 —— 顺序一旦成了隐式依赖，
 改一下执行顺序行为就变，而且没有任何提示。
+
+**FPS 装配（第十八轮，ADR 0016）**：`kind="weapon"` 是新 kind，**不是新组件** ——
+数值仍落在既有 `wieldable` 上。`main.gd` 只做接线：`gun.gd`（屏幕中心射线 + 扣血 +
+弹药 + 枪声）、`gun_view.gd`（挂相机下的模型与枪口火焰）、`crosshair.gd`（中心准心）、
+`hud.gd`（命中 / 击杀 / 命中率 / 用时 / 弹药）。`view.gd` 管视角与后坐、`skin.gd`
+管骨架与步速、`motion.gd` 管求方向与推箱子 —— `player.gd` 只剩装配。
+命中接的是既有 `vitals`，**没有第二条伤害链**；训练场是 `room.start = true` 的
+一间 TOML 房间，靶子就是既有 `enemy/bone_walker`，不另造实体。
 mod 系统从 priority=100 起插在同一张有序表里，见 §5 ② 与 ADR 0011。
 
 网格侧已经全覆盖：契约 7 种，内置兜底实现 7 种（`world/mesh_lib.gd`），

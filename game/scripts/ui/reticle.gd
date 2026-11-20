@@ -25,6 +25,10 @@ const COLOR_RIM := Color(0.04, 0.05, 0.09, 0.85)
 const SURFACE_LIFT := 0.02
 
 var hands = null
+## 第三人称的落点指示。第一人称下它必须消失 —— 它画在射线落点上，
+## 而第一人称的相机就在头里，落点常常只有一两米远，圈会糊满半个屏幕。
+## 第一人称的准心是 `crosshair.gd`（画在屏幕上），两者别混。
+var player = null
 
 var _mat: StandardMaterial3D
 var _rim: MeshInstance3D
@@ -74,7 +78,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	if hands == null:
+	if hands == null or (player != null and bool(player.is_first_person())):
 		visible = false
 		return
 	var p: Dictionary = hands.place_point()

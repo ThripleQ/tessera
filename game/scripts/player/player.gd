@@ -12,10 +12,10 @@ extends CharacterBody3D
 
 const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
-const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
-const RIG = preload("res://scripts/player/character_rig.gd")
 const HANDS = preload("res://scripts/player/hands.gd")
 const BAG = preload("res://scripts/player/bag.gd")
+## 求方向、推箱子这两块纯物理活儿住在 motion.gd —— 它不认识视角和枪。
+const MOTION = preload("res://scripts/player/motion.gd")
 
 ## 玩家用哪个角色资产。这个名字就是 `assets/characters/` 下的文件名。
 ## 换角色只改这一行 —— 不用碰骨架、动画、材质，那些都在资产层归一化好了。
@@ -36,34 +36,33 @@ const COYOTE_TIME := 0.12
 const JUMP_BUFFER := 0.12
 const TURN_RATE := 13.0
 
-const MOUSE_SENS := 0.0022
-const PITCH_MIN := -1.10
-const PITCH_MAX := 0.40
-const ARM_LENGTH := 3.8
+## 视角（第一/第三人称、俯仰、后坐回位）住在自己那个文件里。
+## 它和"怎么动"是两件事 —— 混在一起时最典型的退化是"为了让镜头好看去改
+## 物理参数"，而两个问题的解法看起来都像"调一个数"。
+const VIEW = preload("res://scripts/player/view.gd")
+## 外观（骨架、步速、换角色）也在自己那个文件里 —— 它不知道胶囊和输入，
+## 只回答"这套腿一秒钟能走多远"。
+const SKIN = preload("res://scripts/player/skin.gd")
 const HEAD_HEIGHT := 1.40
 
 const BODY_RADIUS := 0.30
 const BODY_HEIGHT := 1.68
 
-## 推刚体的力度。CharacterBody3D 默认只是被挡住，不会推动 RigidBody——
-## 不给冲量的话，"物理世界"会变成"一堵会掉的墙"。
-const PUSH_STRENGTH := 2.2
-
 ## 主角配色。玩家的外观属于引擎，不是内容 —— 将来做"换角色皮肤"才走内容层。
 const PLAYER_COLOR := Color(0.46, 0.72, 0.96)
 const EYE_COLOR := Color(0.10, 0.11, 0.18)
 
-var _yaw := 0.0
-var _pitch := -0.16
+var _view
 var _coyote := 0.0
 var _buffer := 0.0
 var _captured := false
 var _arm: SpringArm3D
 var _camera: Camera3D
 var _visual: Node3D
-var _rig
+var _skin
 var _hands
 var _bag
+var _gun = null
 ## 实际使用的移动速度。开局等于常量，`_apply_gait()` 会把它们改成动画反推值。
 var _walk_speed := WALK_SPEED
 var _sprint_speed := SPRINT_SPEED
@@ -121,11 +120,10 @@ func _ready() -> void:
 	# 外观：先试带动画的角色资产，拿不到就退回程序化几何。
 	# 这条回退不是防御性代码 —— 资产目录是可以整个删掉的，删掉之后游戏
 	# 必须还能跑，哪怕人重新变成一个会滑的方块。装不上就满屏空白，比没有更糟。
-	_rig = RIG.new()
-	_rig.name = "rig"
-	_visual.add_child(_rig)
-	if _rig.setup(CHARACTER_ID, PLAYER_COLOR, EYE_COLOR):
-		print("玩家外观：%s（%d 个动画片段）" % [CHARACTER_ID, _rig.clip_count()])
+	_skin = SKIN.new()
+	_skin.remember_colors(PLAYER_COLOR, EYE_COLOR)
+	if _skin.build(_visual, CHARACTER_ID, PLAYER_COLOR, EYE_COLOR):
+		print("玩家外观：%s（%d 个动画片段）" % [CHARACTER_ID, _skin.clip_count()])
 		_apply_gait()
 	else:
 		print("玩家外观：角色 `%s` 用不了，退回内置几何" % CHARACTER_ID)
@@ -137,7 +135,6 @@ func _ready() -> void:
 
 	_arm = SpringArm3D.new()
 	_arm.name = "arm"
-	_arm.spring_length = ARM_LENGTH
 	_arm.margin = 0.25
 	# 不让弹簧臂被玩家自己的胶囊弹开。
 	_arm.add_excluded_object(get_rid())
@@ -145,7 +142,7 @@ func _ready() -> void:
 
 	_camera = Camera3D.new()
 	_camera.name = "camera"
-	_camera.fov = 72.0
+	_camera.fov = 78.0
 	_camera.current = true
 	_arm.add_child(_camera)
 
@@ -153,9 +150,43 @@ func _ready() -> void:
 	_hands = HANDS.new()
 	_hands.setup(self, _camera, hooks, api, world, _bag)
 
-	rotation.y = _yaw
+	# 视角必须在相机和外观都建好之后装：它一上来就要按模式摆好，
+	# 否则第一帧是"第三人称的相机 + 看不见的自己"，然后才跳过来。
+	_view = VIEW.new()
+	_view.setup(self, _arm, _camera, _visual)
+
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_captured = true
+
+
+## 切换视角。返回切换之后是不是第一人称。
+##
+## 顺带是玩法上的切换：第一人称左键开火，第三人称左键抓东西 ——
+## 两套动作共用一个键，但它们的语境完全不同，混在一起会互相打断。
+func toggle_view() -> bool:
+	var fp: bool = _view.toggle()
+	# 换视角时松扳机、放下手里的东西：第三人称抓着箱子切到第一人称，
+	# 箱子会顶在脸上，而玩家会以为是"画面出错了"。
+	if _gun != null:
+		_gun.trigger(false)
+		_gun.set_shown(fp)
+	if _hands != null and fp:
+		_hands.release(false)
+	return fp
+
+
+## 后坐力。由枪在每一发之后调用 —— 玩家自己不知道枪的存在，
+## 所以这里只收两个角度，怎么来的不关它的事。
+func add_recoil(pitch: float, yaw: float) -> void:
+	_view.add_recoil(pitch, yaw)
+
+
+## 把枪装到手上。由装配层在入树之后调用。
+func attach_gun(gun) -> void:
+	_gun = gun
+	if _gun != null:
+		_gun.setup_view(_camera)
+		_gun.set_shown(_view.first_person)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -164,14 +195,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if _captured:
-				# 按住左键抓住，松手扔出去。这是沙盒里最自然的一对动作。
-				_hands.press()
+				if _view.first_person and _gun != null:
+					# 第一人称：左键是扳机。抓取在这个视角下没有意义 ——
+					# 你连自己的手都看不见，抓住的箱子糊在脸上。
+					_gun.trigger(true)
+				else:
+					# 按住左键抓住，松手扔出去。这是沙盒里最自然的一对动作。
+					_hands.press()
 			else:
 				# 没捕获鼠标时，左键的职责是先把鼠标要回来。
 				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 				_captured = true
 		elif _captured:
-			_hands.release(true)
+			if _view.first_person and _gun != null:
+				_gun.trigger(false)
+			else:
+				_hands.release(true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		# 右键把对着的东西**收进背包**（不是删掉）。
 		#
@@ -187,14 +226,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_captured = false
 	elif event is InputEventMouseMotion and _captured:
-		_yaw -= event.relative.x * MOUSE_SENS
-		_pitch = clamp(_pitch - event.relative.y * MOUSE_SENS, PITCH_MIN, PITCH_MAX)
+		_view.look(event.relative)
 	elif event is InputEventKey and event.physical_keycode == KEY_SPACE and event.pressed:
 		# 不直接起跳，只记一次"意图"。由物理帧判断当时到底能不能跳。
 		_buffer = JUMP_BUFFER
 	elif event is InputEventKey and event.physical_keycode == KEY_R and event.pressed:
-		# 轻轻放下，不给冲量。想摆东西时必须有这个 —— 否则每次都是扔。
-		_hands.release(false)
+		if _view.first_person and _gun != null:
+			_gun.reload()
+		else:
+			# 轻轻放下，不给冲量。想摆东西时必须有这个 —— 否则每次都是扔。
+			_hands.release(false)
+	elif event is InputEventKey and event.physical_keycode == KEY_V and event.pressed:
+		# 第一 / 第三人称。玩法上是"开枪"和"搬东西"两个模式，
+		# 验收上是"能看见自己"和"看不见自己"。
+		toggle_view()
 	elif event is InputEventKey and event.physical_keycode == KEY_F8 and event.pressed:
 		# 换角色。听起来像玩法，其实是**验收**：见 cycle_character()。
 		cycle_character()
@@ -202,55 +247,38 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## 让移动速度跟着动画走，而不是让动画去追速度。
 ##
-## 这是"脚不打滑"的全部秘密，也是最容易被忽略的一步：只调播放倍率只能修一半，
-## 因为真正错的是**速度本身**。人跑 4.6 m/s，而这套动画最快只画到 2.42 m/s，
-## 想对上就得把倍率拉到 1.9 倍 —— 腿每秒迈 285 步，那不是跑步，是蜂鸟。
-##
-## 所以反过来：腿迈多快，人就跑多快。速度不再是一个凭感觉的数字，
-## 它是"这套动画的步幅 × 步频"算出来的。换角色包，速度自动跟着变。
+## 这是"脚不打滑"的全部秘密：只调播放倍率只能修一半，因为真正错的是**速度本身**。
+## 腿迈多快，人就跑多快 —— 速度不是凭感觉定的数，是"这套动画的步幅 × 步频"
+## 算出来的（ADR 0015）。换角色包，速度自动跟着变。
 func _apply_gait() -> void:
-	var walk: float = _rig.gait_walk()
-	var run: float = _rig.gait_run()
-	if walk <= 0.0 or run <= walk:
+	if _skin.walk_speed <= 0.0 or _skin.run_speed <= _skin.walk_speed:
 		print("移动速度：拿不到步速档位，用默认 %.1f / %.1f m/s" % [_walk_speed, _sprint_speed])
 		return
-	_walk_speed = walk
-	_sprint_speed = run
+	_walk_speed = _skin.walk_speed
+	_sprint_speed = _skin.run_speed
 	print("移动速度：走路 %.2f / 冲刺 %.2f m/s（由 %d 档动画反推）"
-		% [walk, run, _rig.tier_count()])
+		% [_walk_speed, _sprint_speed, _skin.tier_count()])
 
 
 ## 换下一个角色（F8）。返回换上的是谁，空串表示没换成。
 ##
-## 这不是"换装系统"，是**通道的验收**：如果加一个角色需要改代码，
-## 那么"丢个文件夹就能玩"这句话就是假的。所以这里的角色名单只有一个来源 ——
-## `assets/characters/` 目录里有什么文件，就能按什么顺序挨个试。
-##
 ## 顺便也是最省事的验证方式：不用改常量、不用重启，
 ## 按一下就能看出"新角色的身高、朝向、步态、装备"是不是自动对上了。
-##
-## 速度必须跟着重算：不同角色包腿不一样长，沿用上一个角色的速度就是让它滑。
 func cycle_character() -> String:
-	var ids := CHARACTER_ASSETS.character_ids()
-	if ids.size() < 2:
+	var next: String = _skin.cycle()
+	if next.is_empty():
 		return ""
-	# `_rig` 是 untyped 的，这一句必须显式写 String：`:=` 推不出来，
-	# 而那个 Parse Error 只在真正加载这个文件的时候才炸（游戏或探针）。
-	var cur: String = _rig.character_id()
-	var at: int = ids.find(cur)
-	# 找不到当前角色（第一次跑、或者那个文件被删了）时从头开始。
-	var next := String(ids[0] if at < 0 else ids[(at + 1) % ids.size()])
-	if not _rig.swap(next, PLAYER_COLOR, EYE_COLOR):
-		return ""
+	# 速度必须跟着重算：不同角色包腿不一样长，沿用上一个角色的速度就是让它滑。
 	_apply_gait()
-	print("玩家外观：%s（%d 个动画片段）" % [next, _rig.clip_count()])
+	print("玩家外观：%s（%d 个动画片段）" % [next, _skin.clip_count()])
 	character_changed.emit(next)
 	return next
 
 
 func _physics_process(delta: float) -> void:
-	rotation.y = _yaw
-	_arm.rotation.x = _pitch
+	# 视角自己回位、自己写节点。后坐只加在相机上，不加在身体上：
+	# 否则连发时人会被"推着转向"，走路方向跟着枪口漂，手感立刻变糊。
+	_view.tick(delta)
 
 	if is_on_floor():
 		_coyote = COYOTE_TIME
@@ -264,7 +292,7 @@ func _physics_process(delta: float) -> void:
 		_buffer = 0.0
 		_coyote = 0.0
 
-	var wish := Vector3.ZERO if input_blocked else _wish_direction()
+	var wish := Vector3.ZERO if input_blocked else MOTION.wish_direction(transform.basis)
 	var speed := _sprint_speed if Input.is_physical_key_pressed(KEY_SHIFT) else _walk_speed
 	var target := wish * speed
 	var accel := GROUND_ACCEL if is_on_floor() else AIR_ACCEL
@@ -277,59 +305,31 @@ func _physics_process(delta: float) -> void:
 	if wish.length_squared() > 0.001:
 		# 身体转向移动方向，相机方向不受影响 —— 所以视觉是独立的子节点。
 		var move_yaw := atan2(-wish.x, -wish.z)
-		_visual.rotation.y = lerp_angle(_visual.rotation.y, move_yaw - _yaw,
+		_visual.rotation.y = lerp_angle(_visual.rotation.y, move_yaw - _view.yaw,
 				clamp(TURN_RATE * delta, 0.0, 1.0))
 
 	move_and_slide()
-	_push_bodies(delta)
+	MOTION.push_bodies(self, delta)
 	# 动画跟着**真实速度**走，不跟着输入走。用输入意图判会出现那种穿帮：
 	# 贴着墙按 W，腿在跑、人没动。而被箱子推着走的时候，腿也该迈。
 	var flat_speed := Vector2(velocity.x, velocity.z).length()
-	_rig.update_locomotion(flat_speed, is_on_floor(), velocity.y, delta)
+	_skin.rig.update_locomotion(flat_speed, is_on_floor(), velocity.y, delta)
 	# 抓取在 move_and_slide 之后跑：手上的东西永远以"玩家已经落到哪儿"为准，
 	# 而不是以玩家上一帧的位置为准。
 	_hands.update(delta)
-
-
-## 推开挡路的刚体。
-##
-## CharacterBody3D 撞上 RigidBody3D 时默认只会被挡住 —— 箱子一动不动，
-## 玩家会以为"这游戏没有物理"。所以要主动给冲量，并且按玩家当时的速度给，
-## 慢走轻推、冲刺撞飞。
-func _push_bodies(delta: float) -> void:
-	var speed := Vector2(velocity.x, velocity.z).length()
-	if speed < 0.4:
-		return
-	for i in get_slide_collision_count():
-		var hit := get_slide_collision(i)
-		var body = hit.get_collider()
-		if body is RigidBody3D:
-			var push := -hit.get_normal() * speed * PUSH_STRENGTH * delta * 60.0
-			# 作用在接触点上，箱子才会转，而不是整体平移。
-			body.apply_impulse(push, hit.get_position() - body.global_position)
-
-
-## 相机朝向决定"前"在哪。所以输入不是世界方向，要过一遍 player 的 basis。
-func _wish_direction() -> Vector3:
-	var ix := 0.0
-	var iz := 0.0
-	if Input.is_physical_key_pressed(KEY_W):
-		iz -= 1.0
-	if Input.is_physical_key_pressed(KEY_S):
-		iz += 1.0
-	if Input.is_physical_key_pressed(KEY_D):
-		ix += 1.0
-	if Input.is_physical_key_pressed(KEY_A):
-		ix -= 1.0
-	if ix == 0.0 and iz == 0.0:
-		return Vector3.ZERO
-	var dir := transform.basis * Vector3(ix, 0.0, iz)
-	dir.y = 0.0
-	return dir.normalized()
+	if _gun != null:
+		_gun.tick(delta)
 
 
 func camera() -> Camera3D:
 	return _camera
+
+
+## 现在是不是第一人称。准星、落点圈、手里的枪都靠它决定露不露面 ——
+## 三个部件各自去读 `_view` 会让"视角"这件事有三个入口，
+## 所以它们统一问玩家这一句。
+func is_first_person() -> bool:
+	return _view != null and _view.first_person
 
 
 ## 抓取器。给探针和调试用 —— 玩法本身不通过这个访问，输入直接喂给它。
@@ -347,7 +347,7 @@ func bag():
 ## 只存位置和两个角度，不存速度 —— 读档时正在飞的玩家应该落地，
 ## 而不是保留着上次退出那一刻的动量继续飞。那种"还原得太真"反而更怪。
 func pose() -> Dictionary:
-	return {"pos": global_position, "yaw": _yaw, "pitch": _pitch}
+	return {"pos": global_position, "yaw": _view.yaw, "pitch": _view.pitch}
 
 
 func set_pose(p: Dictionary) -> void:
@@ -357,8 +357,7 @@ func set_pose(p: Dictionary) -> void:
 		# 速度必须清掉：否则读档瞬间角色会带着上一局的速度冲出去，
 		# 而这个"上一局"其实是上一次启动时的事。
 		velocity = Vector3.ZERO
-	_yaw = float(p.get("yaw", 0.0))
-	_pitch = clamp(float(p.get("pitch", -0.16)), PITCH_MIN, PITCH_MAX)
-	rotation.y = _yaw
-	if _arm != null:
-		_arm.rotation.x = _pitch
+	_view.yaw = float(p.get("yaw", 0.0))
+	# 俯仰不直接写：夹紧范围取决于当前是第一还是第三人称，交给视角自己判。
+	_view.pitch = float(p.get("pitch", -0.16))
+	_view.apply()

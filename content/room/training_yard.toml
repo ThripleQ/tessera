@@ -1,0 +1,20 @@
+api_version = 1
+kind = "room"
+name = "训练场"
+doc = "开局房间。亮的，空的，四只骷髅从对面走过来 —— 手里有枪，先打一轮再说。"
+tags = ["training", "outdoor"]
+
+[components.room]
+size_x = 30.0
+size_z = 30.0
+lit = true
+start = true
+
+# 靶子就是真正的敌人，不是另一种东西。
+#
+# 理由：假靶子只能验证「射线能打到」，验证不了「打中之后它会疼、会死、会掉」。
+# 会走过来的骷髅同时是靶子和威胁 —— 它逼你退、逼你压枪，这才叫训练场。
+[components.spawner]
+archetype = "enemy/bone_walker"
+count = 4
+radius = 5.0

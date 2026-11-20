@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 一条命令把改动交给 CI 验收：便宜的检查在本地跑，贵的（12 次引擎启动）在 CI 跑。
+# 一条命令把改动交给 CI 验收：便宜的检查在本地跑，贵的（13 次引擎启动）在 CI 跑。
 #
 #   ./ship.sh "commit message"
 #   ./ship.sh                      # 改动已经提交过，只等 CI
 #
 # 为什么这么分：
-#   本机 136 秒 / CI 30 秒。差的不是网络，是引擎冷启动 12 次 × 8–10 秒，
+#   本机约 150 秒 / CI 30–45 秒。差的不是网络，是引擎冷启动 13 次 × 8–10 秒，
 #   加上这台机器没有 GPU 只能软件跑。而 CI 的机器比本机快得多。
 #
 # 本地仍要跑的那两样是"最常犯、最便宜"的错：内容编译不过、架构纪律违规
@@ -52,7 +52,9 @@ fi
 
 sha="$(git rev-parse HEAD)"
 say "推送 $branch @ ${sha:0:7}"
-if ! git push -q origin "$branch" 2>&1 | tail -3; then
+# 不接管道：pipefail 本来就能兜住退出码，但 `| tail` 会把失败原因截成三行。
+# 推上去必须看得见结果，包括失败时 git 说的那一整段。
+if ! git push origin "$branch"; then
     printf '\033[31m推送失败\033[0m\n'
     exit 1
 fi

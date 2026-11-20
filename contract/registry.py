@@ -161,6 +161,15 @@ MESHES: dict[str, int] = {
     "player_lowpoly": 692,    # 球头 + 7 盒 + 12 段柱体。主角只有一个，贵得起
 }
 
+# 音效注册表：内容里只能引用这里出现过的音效 id，**不许写文件路径**。
+#
+# 和 MESHES 一样是手写清单而不是扫目录：路径由 id 拼出来（`assets/sfx/<id>.ogg`），
+# 于是内容作者拿不到"读任意文件"的能力。加一个音效 = 放文件 + 在这里登记一行，
+# 漏登记会被编译期挡下（枚举校验），不会静默变成静音。
+SFX: tuple[str, ...] = (
+    "rifle_shot",   # 一声真枪响，0.62 秒，见 assets/ASSETS.md
+)
+
 # 配色注册表：(r, g, b)，0..1 的 sRGB。
 # 颜色放在契约里而不是引擎里，是为了让引擎**不认识任何配色名**——
 # 加一个新配色只改这一处，引擎从内容包读到的就是新颜色。
@@ -504,14 +513,27 @@ component(
     size_x=Field("float", 24.0, 2.0, 500.0, doc="宽度"),
     size_z=Field("float", 24.0, 2.0, 500.0, doc="进深"),
     lit=Field("bool", False, doc="是否有烘焙光照"),
+    start=Field("bool", False, doc="开局房间。多个都标了时按房间 id 取第一个"),
 )
 
 component(
     "wieldable",
-    "可持握武器的数值。",
-    damage=Field("int", 1, 0, 100_000, doc="伤害"),
-    reach=Field("float", 1.5, 0.0, 20.0, doc="攻击距离"),
-    cooldown=Field("float", 0.6, 0.0, 60.0, doc="冷却秒"),
+    "可持握武器的数值。\n"
+    "    **一把枪是一条 `kind = \"weapon\"` 的内容**，数值全在这里；\n"
+    "    摆在世界里的同款（kind = archetype）就只是件道具，不会开火。\n"
+    "    为什么把弹道相关的数放在契约而不是代码里：射速、弹匣、散布、后坐\n"
+    "    是手感的第一现场，改它们不该需要动引擎（铁律 1）。",
+    damage=Field("int", 1, 0, 100_000, doc="每发伤害"),
+    reach=Field("float", 1.5, 0.0, 400.0, doc="射程，米"),
+    cooldown=Field("float", 0.6, 0.0, 60.0, doc="近战冷却秒（枪用 rate，不用它）"),
+    rate=Field("float", 2.0, 0.05, 60.0, doc="每秒发数"),
+    mag=Field("int", 1, 1, 999, doc="弹匣容量"),
+    reload=Field("float", 1.0, 0.0, 20.0, doc="换弹秒数"),
+    spread=Field("float", 0.0, 0.0, 30.0, doc="散布半角，度。0 = 绝对精准"),
+    recoil_pitch=Field("float", 0.0, 0.0, 30.0, doc="每发抬枪，度"),
+    recoil_yaw=Field("float", 0.0, 0.0, 30.0, doc="每发横向抖动幅度，度"),
+    auto=Field("bool", False, doc="按住不放是否连发"),
+    sound=Field("str", "", enum=SFX, doc="开火音效 id。空 = 静音"),
 )
 
 component(
@@ -585,6 +607,14 @@ hook(
 kind("archetype", "世界里被摆放的东西：怪、道具、装饰", require=("name",))
 kind("item", "背包里的东西", require=("name",))
 kind("room", "一个空间单元", require=("name",))
+kind(
+    "weapon",
+    "玩家手里的枪。一条 weapon 内容 = 一把枪，数值全在 wieldable 组件里。\n"
+    "    它不是一个能被摆放的实体（那需要 kind = archetype）—— 这条分界\n"
+    "    让『世界里捡到一把枪』和『玩家拿着哪把枪』变成两件事，\n"
+    "    而不是靠引擎猜某个 archetype 是不是武器。",
+    require=("name",),
+)
 kind("patch", "覆写别人的内容（mod 专用）", require=("target",))
 kind(
     "loot_table",

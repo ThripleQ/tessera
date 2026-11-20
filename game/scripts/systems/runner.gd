@@ -29,6 +29,10 @@ var pack = null
 var _systems: Array = []
 var _mod_systems: Array[Dictionary] = []
 var _state = null
+## 血量系统单独留一份引用：枪要往它身上递"这一发打中了谁"。
+## 走的是和装配层同样的口子（main 把 `vitals()` 交给玩家），
+## 而不是让枪自己去 `_systems` 里翻 —— 数组的顺序不该成为接口。
+var _vitals = null
 ## 给探针看：每个 mod 系统自己的上下文。引擎运行时不会把它交给别人。
 var contexts: Array = []
 ## 给探针看：这一帧跑了几个系统。少了它，"系统根本没跑"会一直是绿的。
@@ -46,6 +50,7 @@ func setup(w, p, a, b, pk, mod_systems: Array) -> void:
 	loco.setup(world, player, pack)
 	var vit = VITALS.new()
 	vit.setup(world, api, bus, pack)
+	_vitals = vit
 	_systems = [loco, vit]
 
 	_state = EXTENSION_STATE.new()
@@ -136,6 +141,11 @@ func step(dt: float) -> void:
 
 func extension_systems_count() -> int:
 	return _mod_systems.size()
+
+
+## 血量系统。给 HUD 读击杀数、给枪递伤害 —— 两者都由装配层转手。
+func vitals():
+	return _vitals
 
 
 ## 给探针读「这个系统到底写没写进自定义状态」，不是给 mod 的接口。

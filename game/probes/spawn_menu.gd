@@ -57,6 +57,13 @@ func _bag():
 func _process(_delta: float) -> bool:
 	_f += 1
 
+	if _f == 10:
+		# 这一整套（抓 / 放 / 收 / 世界里的落点圈）都是**第三人称**的玩法。
+		# 第一人称下左键是扳机、屏中是另一个准心、落点圈故意藏着 ——
+		# 探针要验的是抓放那条链，所以先显式切回第三人称。
+		# 不能放在 `_initialize` 里：那一刻 main 的 `_ready` 还没跑，玩家还不存在。
+		_main._player.toggle_view()
+
 	if _f == 20:
 		# 常驻提示藏着的话，玩家永远不知道 Tab 和右键是干什么的。
 		print("MENU 常驻提示可见：%s" % _menu().get_node("hint").visible)

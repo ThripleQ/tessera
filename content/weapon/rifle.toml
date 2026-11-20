@@ -1,0 +1,24 @@
+api_version = 1
+kind = "weapon"
+name = "训练步枪"
+doc = "第一把枪。数值全部在这张表里 —— 想让它更抖、更快、更疼，改这里，不改代码。"
+tags = ["rifle", "auto"]
+
+# 手感的第一现场。每一项都能单独调，调完重开就能感觉到。
+#
+#   damage 25   骨行者 45 血 → 两发一个。一发一个会让人懒得瞄准。
+#   rate 9      每秒 9 发。再快弹匣 30 发只够 3 秒，训练场会变成泼水。
+#   recoil      每秒累计抬 7.6 度。不压枪，第四发就打天上去了 ——
+#               这是「枪要会往上跑」这件事唯一的实现，不需要动画文件。
+#   spread 0.8  站着腰射的散布。它和准星一起收紧，玩家能看见「现在能打准了」。
+[components.wieldable]
+damage = 25
+reach = 120.0
+rate = 9.0
+mag = 30
+reload = 1.7
+spread = 0.8
+recoil_pitch = 0.85
+recoil_yaw = 0.30
+auto = true
+sound = "rifle_shot"
