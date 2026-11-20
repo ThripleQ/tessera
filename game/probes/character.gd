@@ -189,9 +189,14 @@ func _check_one(char_id: String) -> void:
 	var got: float = float(meta.get("scaled_height", 0.0))
 	var foot: float = float(meta.get("foot", 99.0))
 	var missing: Array[String] = []
-	for clip in WANT_CLIPS:
-		if ap == null or not ap.has_animation(clip):
-			missing.append(clip)
+	var clips: Dictionary = meta.get("clips", {})
+	# 不认具体片段名（`Walking_A` 是 KayKit 的叫法），只认**角色**有没有着落：
+	# 待机 / 走 / 跑这三个必须有，跳和落地可以缺 —— 缺了会退化成"原地不动"，
+	# 但那不影响站着和走路，不该让整个角色不合格。
+	for role in ["idle", "walk", "run"]:
+		var clip := String(clips.get(role, ""))
+		if clip.is_empty() or ap == null or not ap.has_animation(clip):
+			missing.append(role)
 	var bones := 0 if sk == null else sk.get_bone_count()
 	# 手上不该有可见网格：这是"举着四把剑"的唯一判据。
 	# 判**位置**（handslot 之下）而不是名字，因为名字每家都不一样。

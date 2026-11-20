@@ -1,0 +1,11 @@
+{
+  "_doc": "Quaternius 的极简人类（poly.pizza/Man）。11 条动画、6 个纯色材质、无贴图、单个蒙皮网格 —— 身上没有任何配件，剪影干净。",
+  "_source": "https://poly.pizza/m/nIItLV9nxS 的上游同款：quaternius.com 的 Ultimate Modular Characters（CC0）。glb 取自 poly.pizza 的 CDN。",
+  "outline": false,
+  "_outline_note": "这套网格的法线不规整，反向外扩的描边会炸成一屏飞出去的黑碎片。模型本身没问题，是描边这个手法对它的法线不成立。",
+  "speeds": {
+    "HumanArmature|Man_Walk": 1.0,
+    "HumanArmature|Man_Run": 2.7
+  },
+  "_speeds_note": "标定值，不是实测：这套骨架挂在 100 倍缩放的节点下，自动测量给出来的数是 0.006，看起来像个正常数所以更危险。更麻烦的是它的走路动画本身脚几乎不动——一个循环水平行程只有约 14 cm，而 1.35 m/s 需要约 70 cm，所以按 1.0 标定它一定会滑。它现在不是默认角色，就是为了这件事。"
+}

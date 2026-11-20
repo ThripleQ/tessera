@@ -31,7 +31,7 @@ const MIN_SUPPORT := 4
 const FOOT_HINTS: Array[String] = ["foot", "toe", "ankle", "脚"]
 
 
-## 一条片段的运动信息（**骨骼原始单位**/秒，未乘节点缩放）。
+## 一条片段的运动信息（**模型空间单位**/秒，未乘节点缩放）。
 ##
 ## 返回 {"ok", "speed", "forward", "lateral", "feet", "duty", "fit"}：
 ##   speed   —— 地面速度大小
@@ -45,7 +45,13 @@ const FOOT_HINTS: Array[String] = ["foot", "toe", "ankle", "脚"]
 ## 爬起来的片段一起收进来 —— 它们也有一小段脚在原地蹭，速度不为零。
 ## 而 duty / fit 是**运动形态**的指纹：真正的走跑循环是"一只脚长时间匀速后撤"，
 ## 攻击是"脚蹭一下就抬起来"。这两项能分开它们，且与命名无关。
-static func clip_motion(anim: Animation, sk: Skeleton3D) -> Dictionary:
+##
+## `binds`（可选）：骨骼 → 绑定矩阵。**没有它，一大半现成资产量不出东西。**
+## 有些包（Quaternius 那套）把骨架挂在 100 倍缩放的节点下，骨骼自身的位移
+## 只有 0.006 —— 真正的长度藏在 `inverseBindMatrices` 里。只读骨骼会得到
+## 一个缩小一百倍的数，而且它"看起来像个正常的数"，比报错难查得多。
+## 乘上绑定矩阵之后，坐标统一到网格空间，两套绑法就都能量。
+static func clip_motion(anim: Animation, sk: Skeleton3D, binds: Dictionary = {}) -> Dictionary:
 	var empty := {
 		"ok": false, "speed": 0.0, "forward": 0.0, "lateral": 0.0,
 		"feet": 0, "duty": 0.0, "fit": 0.0,
@@ -53,7 +59,7 @@ static func clip_motion(anim: Animation, sk: Skeleton3D) -> Dictionary:
 	var feet := foot_bones(sk)
 	if feet.is_empty():
 		return empty
-	var ctx := prepare(anim, sk)
+	var ctx := prepare(anim, sk, binds)
 	var sum := Vector2.ZERO
 	var counted := 0
 	var duty_sum := 0.0
@@ -107,7 +113,7 @@ static func foot_bones(sk: Skeleton3D) -> Array[int]:
 ##
 ## 公开而非下划线开头：探针要拿它和播放器真实驱动**对拍** ——
 ## 测量逻辑如果不能被独立验证，它给出来的数就只是"看起来对"。
-static func prepare(anim: Animation, sk: Skeleton3D) -> Dictionary:
+static func prepare(anim: Animation, sk: Skeleton3D, binds: Dictionary = {}) -> Dictionary:
 	var pos: Dictionary = {}
 	var rot: Dictionary = {}
 	for ti in anim.get_track_count():
@@ -130,7 +136,7 @@ static func prepare(anim: Animation, sk: Skeleton3D) -> Dictionary:
 		parent.append(sk.get_bone_parent(i))
 	return {
 		"anim": anim, "count": sk.get_bone_count(),
-		"pos": pos, "rot": rot, "rest": rest, "parent": parent,
+		"pos": pos, "rot": rot, "rest": rest, "parent": parent, "binds": binds,
 	}
 
 
@@ -227,11 +233,15 @@ static func _foot_motion(ctx: Dictionary, bone: int) -> Dictionary:
 	}
 
 
-## t 时刻某根骨骼相对骨架根的位置。
+## t 时刻某根骨骼在**网格空间**里的位置。
 ##
 ## 这就是 Skeleton3D 自己会算的东西，只是不经过播放器：
 ## 每根骨骼的局部姿态 = 绑定姿势，再被位置 / 旋转轨道覆盖，然后沿父链累乘。
 ## 轨道里没有的骨骼保持绑定姿势 —— 这正是 Godot 的行为。
+##
+## 最后再乘一次绑定矩阵（`binds` 里有的话），把坐标从骨架空间搬到网格空间。
+## 走一遍之后量到的才是**画面上那只脚**在动多少 —— 骨架自己可能只是个
+## 缩小一百倍的空架子，长度全在绑定矩阵里。
 static func bone_at(ctx: Dictionary, bone: int, t: float) -> Vector3:
 	var chain: Array[int] = []
 	var cur := bone
@@ -242,6 +252,9 @@ static func bone_at(ctx: Dictionary, bone: int, t: float) -> Vector3:
 	var xf := Transform3D()
 	for bi in chain:
 		xf = xf * _local_pose(ctx, bi, t)
+	var binds: Dictionary = ctx.get("binds", {})
+	if binds.has(bone):
+		xf = xf * (binds[bone] as Transform3D)
 	return xf.origin
 
 

@@ -7,7 +7,7 @@ extends Node3D
 ## 而那个文件是每次调手感都要打开的地方。
 ##
 ## 这一层不认识任何角色的具体名字：id 由 player 传进来，动画名由
-## `ASSETS.CHARACTER_CLIPS` 映射。换角色 = 换 id，不用改这里一行。
+## `CLIPS.ROLES` 映射。换角色 = 换 id，不用改这里一行。
 ##
 ## **它不是一个"骨骼动画系统"**：没有混合树、没有 IK、没有根运动重定向。
 ## 只有"按速度挑一个片段、按实际速度调播放倍率"。这是刻意的 ——
@@ -16,6 +16,7 @@ extends Node3D
 const ASSETS = preload("res://scripts/world/assets.gd")
 const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
 const GAIT = preload("res://scripts/world/gait.gd")
+const CLIPS = preload("res://scripts/world/clips.gd")
 
 ## 速度分界。用**实际**水平速度判，不用输入意图 ——
 ## 于是被箱子推着走、从斜坡滑下来，也会播放走路。
@@ -38,11 +39,15 @@ const LAND_LOCK := 0.30
 ## 相邻档的区间必须重叠，整条速度带才没有缝 —— 有缝的那一段，
 ## 无论选哪一档倍率都会被夹住，于是脚重新开始滑。
 ##
-## 以 Knight 的三档为例（0.55 / 1.43 / 2.42 m/s）：
-##   0.34–0.93 ｜ 0.89–2.43 ｜ 1.50–4.12   → 0.34 到 4.12 全程无缝
+## 以 Knight 的三档为例（0.73 / 2.05 / 3.16 m/s，带上绑定矩阵后的实测）：
+##   0.33–1.24 ｜ 0.92–3.49 ｜ 1.42–5.37   → 0.33 到 5.37 全程无缝
 ## 上限 1.70 约等于 190 步/分，再高就不像人了。
 ## **想跑更快不是调这两个数，是往资产里加一条更快的动画。**
-const RATE_MIN := 0.62
+##
+## 下限从 0.62 放到 0.45：把位移换算到网格空间之后，各档的速度整体上浮了三分之一
+## 左右（0.55 → 0.73），0.62 × 0.73 = 0.45 m/s 已经盖不住"慢慢挪"。
+## 0.45 倍 ≈ 半速走路，还没到"慢动作"的程度。
+const RATE_MIN := 0.45
 const RATE_MAX := 1.70
 
 ## 资产朝向修正。glTF 里角色的前向按惯例是 +Z，Godot 的前向是 -Z，
@@ -60,6 +65,9 @@ var _gait: Dictionary = {}
 var _clip := ""
 var _rate := 1.0
 var _slide := 0.0
+## 这个角色的片段表（角色 → 待机/走/跑/跳/落地 各叫什么）。
+## 由 `character_assets` 按后缀认出来，认不出的才用内置名。
+var _clips: Dictionary = CLIPS.ROLES
 
 
 ## 返回 true 表示用上了带动画的资产；false 表示退回了程序化几何。
@@ -70,6 +78,7 @@ func setup(char_id: String, fallback_color: Color, fallback_eye: Color) -> bool:
 	if c["ok"] and c["root"] != null:
 		var root: Node3D = c["root"]
 		add_child(root)
+		_clips = c.get("clips", CLIPS.ROLES)
 		_ap = root.find_child("AnimationPlayer", true, false) as AnimationPlayer
 		# 步速档位：加载资产时已经按骨骼实测算过一次（gait.gd 的 measure）。
 		# 这里只是取用，不重新测 —— 测量必须只有一处真相。
@@ -115,6 +124,7 @@ func swap(char_id: String, fallback_color: Color, fallback_eye: Color) -> bool:
 	_slide = 0.0
 	_tiers = []
 	_gait = {}
+	_clips = CLIPS.ROLES
 	return setup(char_id, fallback_color, fallback_eye)
 
 
@@ -124,7 +134,13 @@ func swap(char_id: String, fallback_color: Color, fallback_eye: Color) -> bool:
 ## 除了名字前缀，**测出来的移动档位一律强制循环**：名字不是契约（换个包可能叫
 ## Sprint_A），而"这段动画在往一个方向匀速走"是测出来的事实。
 func _setup_clips(ap: AnimationPlayer) -> void:
-	var looped := ["Idle", "Walking_", "Running_", "Sit_", "Lie_", "Blocking"]
+	# 该循环的不再靠"名字以前缀开头"判：换个包叫 `Man_Walk` 就一个都不匹配，
+	# 于是走路播一秒定格成雕像。所以按**角色表里点名的那几条**强制循环。
+	var looped: Array[String] = []
+	for role in ["idle", "walk", "run", "jump_air"]:
+		var c := String(_clips.get(role, ""))
+		if not c.is_empty():
+			looped.append(c)
 	var by_gait: Array[String] = []
 	for e in _tiers:
 		by_gait.append(String(e["clip"]))
@@ -132,12 +148,7 @@ func _setup_clips(ap: AnimationPlayer) -> void:
 		var a := ap.get_animation(clip_name)
 		if a == null:
 			continue
-		var should_loop := by_gait.has(String(clip_name))
-		if not should_loop:
-			for prefix in looped:
-				if clip_name.begins_with(prefix):
-					should_loop = true
-					break
+		var should_loop := by_gait.has(String(clip_name)) or looped.has(String(clip_name))
 		a.loop_mode = Animation.LOOP_LINEAR if should_loop else Animation.LOOP_NONE
 
 
@@ -243,7 +254,7 @@ func _play_gait(speed: float) -> void:
 func play(want: String) -> void:
 	if not _asset or want == _state:
 		return
-	var clip: String = CHARACTER_ASSETS.CHARACTER_CLIPS.get(want, "")
+	var clip: String = String(_clips.get(want, ""))
 	if clip.is_empty() or not _ap.has_animation(clip):
 		return
 	_state = want

@@ -215,6 +215,7 @@ func _playback_speed(clip: String, rate: float) -> float:
 
 	var ys: Array = []
 	var zs: Array = []
+	var binds := _bind_poses()
 	for i in feet.size():
 		ys.append([])
 		zs.append([])
@@ -223,7 +224,13 @@ func _playback_speed(clip: String, rate: float) -> float:
 		var t := fmod(float(k) * SAMPLE_DT * rate, length)
 		_ap.seek(t, true)
 		for i in feet.size():
-			var p := _skel.get_bone_global_pose(feet[i]).origin
+			var g := _skel.get_bone_global_pose(feet[i])
+			# 和表里那一侧对齐：位移统一换算到**网格空间**（乘绑定矩阵）。
+			# 不乘的话，遇到把长度放在绑定矩阵里的资产，这一侧量出来会小一截，
+			# 于是"不打滑"会假红；而两边都不乘则会一起错，假绿。
+			var p := g.origin
+			if binds.has(feet[i]):
+				p = (g * (binds[feet[i]] as Transform3D)).origin
 			ys[i].append(p.y)
 			zs[i].append(p.z)
 
@@ -238,6 +245,22 @@ func _playback_speed(clip: String, rate: float) -> float:
 	if counted == 0:
 		return -1.0
 	return (total / float(counted)) * scale
+
+
+## 骨骼 → 绑定矩阵（从角色身上第一份蒙皮网格取）。没有蒙皮就返回空。
+func _bind_poses() -> Dictionary:
+	var out := {}
+	for n in _rig.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.skin == null:
+			continue
+		for i in mi.skin.get_bind_count():
+			var b := mi.skin.get_bind_bone(i)
+			if b >= 0:
+				out[b] = mi.skin.get_bind_pose(i)
+		if not out.is_empty():
+			return out
+	return out
 
 
 ## 支撑相里 z 的斜率（单位/秒）。返回 INF 表示这只脚量不出来。

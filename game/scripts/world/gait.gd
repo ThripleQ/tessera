@@ -55,13 +55,14 @@ static func measure(root: Node, ap: AnimationPlayer, scale: float,
 	var source := "声明"
 	if declared.is_empty():
 		source = "自动筛选"
+	var binds := _bind_poses(root)
 	for clip in _candidates(ap, declared):
 		var a := ap.get_animation(clip)
 		if a == null:
 			if not declared.is_empty():
 				ASSETS.note_problem("角色 `%s` 声明的步态片段 `%s` 不存在" % [root.name, clip])
 			continue
-		var m := STRIDE.clip_motion(a, sk)
+		var m := STRIDE.clip_motion(a, sk, binds)
 		if not m["ok"]:
 			continue
 		var spd: float = m["speed"] * scale
@@ -83,6 +84,49 @@ static func measure(root: Node, ap: AnimationPlayer, scale: float,
 	var walk: float = float(moving[0]["speed"]) * WALK_RATE
 	var run: float = float(moving[moving.size() - 1]["speed"]) * RUN_RATE
 	return {"moving": moving, "walk": walk, "run": run, "source": source}
+
+
+## 骨骼 → 绑定矩阵。取第一份带蒙皮网格的 skin：
+## 一个角色的所有网格共用同一副骨架，谁先谁后都一样。
+##
+## 没有蒙皮网格（比如纯几何兜底）时返回空字典，测量退回"只读骨骼"的老路。
+static func _bind_poses(root: Node) -> Dictionary:
+	var out: Dictionary = {}
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.skin == null:
+			continue
+		for i in mi.skin.get_bind_count():
+			var bone := mi.skin.get_bind_bone(i)
+			if bone >= 0:
+				out[bone] = mi.skin.get_bind_pose(i)
+		if not out.is_empty():
+			return out
+	return out
+
+
+## 把"片段 → 它隐含的地面速度"整理成和实测一样形状的档位表。
+##
+## 走 / 冲刺速度取最低档和最高档（和 measure 同一条规则），中间档留给加速过程——
+## 于是上层完全不用知道这张表是测出来的还是人标的。
+##
+## 手工标定存在的理由：有些包把骨架挂在缩放节点下、把长度藏在绑定矩阵里，
+## 自动测出来的数会小一个数量级，而且**看起来像个正常数**。
+## 那种资产就由人标一次写进 json，代码不再猜。`source` 必须写"标定"，
+## 不许冒充"实测"—— 两件事的可信度不一样。
+static func from_speeds(speeds: Dictionary) -> Dictionary:
+	var moving: Array = []
+	for clip in speeds.keys():
+		moving.append({"clip": String(clip), "speed": float(speeds[clip])})
+	if moving.is_empty():
+		return {}
+	moving.sort_custom(func(a, b): return float(a["speed"]) < float(b["speed"]))
+	return {
+		"moving": moving,
+		"walk": float(moving[0]["speed"]) * WALK_RATE,
+		"run": float(moving[moving.size() - 1]["speed"]) * RUN_RATE,
+		"source": "标定",
+	}
 
 
 ## 待测的片段名。点名了就只测点名的；没点名就把全部片段过一遍交给物理筛。

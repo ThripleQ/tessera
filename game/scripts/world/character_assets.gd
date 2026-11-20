@@ -17,6 +17,8 @@ extends RefCounted
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const ASSETS = preload("res://scripts/world/assets.gd")
+## 片段表（哪些动画算待机/走/跑）在 clips.gd —— 它管"叫什么"，这里管"加载出来"。
+const CLIPS = preload("res://scripts/world/clips.gd")
 ## 步态（速度表）在 gait.gd —— 那个文件只管"腿有多快"，这里只管"把人加载出来"。
 const GAIT = preload("res://scripts/world/gait.gd")
 ## 角色资产目录（仓库根的 assets/characters/），和 mod 的 mesh 覆盖分开。
@@ -31,14 +33,7 @@ const CHARACTER_EXTS: Array[String] = ["glb", "gltf"]
 ## 现成资产一米八、一米五都有，不归一化就会出现"换个模型人就陷进地里"。
 const CHARACTER_TARGET_HEIGHT := 1.68
 
-const CHARACTER_CLIPS := {
-	"idle": "Idle",
-	"walk": "Walking_A",
-	"run": "Running_A",
-	"jump_up": "Jump_Start",
-	"jump_air": "Jump_Idle",
-	"land": "Jump_Land",
-}
+const CHARACTER_CLIPS := CLIPS.ROLES
 
 static var _char_dir := ""
 static var _char_meta: Dictionary = {}   # id -> {animations, height, surfaces, source}
@@ -149,7 +144,7 @@ static func character(char_id: String) -> Dictionary:
 		s = CHARACTER_TARGET_HEIGHT / h
 		root.scale = Vector3(s, s, s)
 
-	var sw := _retint(root)
+	var sw := _retint(root, bool(opts.get("outline", true)))
 
 	# 步速档位：自动测，不查表。第一次加载某个角色时算一遍并缓存，
 	# 之后同一个 id 直接复用（character() 每次都重建节点，但测量结果与节点无关）。
@@ -158,12 +153,21 @@ static func character(char_id: String) -> Dictionary:
 	var prev: Dictionary = _char_meta.get(char_id, {})
 	if prev.has("locomotion"):
 		loco = prev["locomotion"]
+	elif opts.has("speeds"):
+		# 手工标定：`{"HumanArmature|Man_Walk": 1.0, "HumanArmature|Man_Run": 2.7}`。
+		#
+		# 为什么需要这条路：有些包的骨架把长度放在绑定矩阵或缩放节点里，
+		# 自动测出来的数会小一个数量级 —— 而且它看起来像个正常的数（0.006），
+		# 比直接失败难查得多。这种资产就由人标一次，写进 json，代码不再猜。
+		# 标定值必须**写清是标定**，不能混进"实测"那一档。
+		loco = _table_from_speeds(opts["speeds"])
 	else:
 		loco = GAIT.measure(root, ap, s, opts.get("gait", []), CHARACTER_TARGET_HEIGHT)
 
 	out["ok"] = true
 	out["root"] = root
 	out["animations"] = anims
+	out["clips"] = _resolve_clips(anims, opts.get("clips", {}))
 	out["height"] = h
 	out["scale"] = s
 	out["scaled_height"] = h * s
@@ -174,11 +178,22 @@ static func character(char_id: String) -> Dictionary:
 	out["source"] = path.get_file()
 	_char_meta[char_id] = {
 		"animations": anims, "height": h, "scale": s,
+		"clips": out["clips"],
 		"scaled_height": h * s, "foot": box.position.y * s, "surfaces": sw,
 		"hidden": hidden, "locomotion": loco, "source": path.get_file(),
 	}
 	return out
 
+
+
+## 把"片段 → 它隐含的地面速度"整理成和实测一样形状的档位表。见 `gait.from_speeds`。
+static func _table_from_speeds(speeds: Dictionary) -> Dictionary:
+	return GAIT.from_speeds(speeds)
+
+
+## 这个角色身上"待机 / 走 / 跑 / 跳 / 落地"各是哪条片段（实现在 clips.gd）。
+static func _resolve_clips(anims: PackedStringArray, declared: Dictionary) -> Dictionary:
+	return CLIPS.resolve(anims, declared)
 
 
 ## 资产自带的选项文件 `<id>.json`，可选，两项：`gait` / `hide_prefix`。
@@ -281,7 +296,7 @@ static func character_summary() -> String:
 ## 现成资产带的是 PBR 材质，直接用会和卡通世界割裂得很明显；
 ## 换成 toon 之后**贴图仍然保留**（toon.gdshader 的 use_albedo_tex），
 ## 于是角色既有渐变图的细节，又和箱子吃同一套两级色阶。
-static func _retint(root: Node) -> int:
+static func _retint(root: Node, outline: bool = true) -> int:
 	var sw := 0
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
@@ -296,16 +311,16 @@ static func _retint(root: Node) -> int:
 			if src is BaseMaterial3D:
 				tex = (src as BaseMaterial3D).albedo_texture
 				col = (src as BaseMaterial3D).albedo_color
-			mi.set_surface_override_material(i, _char_material(tex, col))
+			mi.set_surface_override_material(i, _char_material(tex, col, outline))
 			sw += 1
 	return sw
 
 
 ## 角色材质也按（贴图, 颜色）共用。一个角色 15 个网格，一份材质足够 ——
 ## 和第 13 步那条"材质数不该跟着物体数走"是同一条红线。
-static func _char_material(tex: Texture2D, col: Color) -> ShaderMaterial:
+static func _char_material(tex: Texture2D, col: Color, outline: bool = true) -> ShaderMaterial:
 	var key := "none" if tex == null else str(tex.get_instance_id())
-	key += "|" + col.to_html()
+	key += "|" + col.to_html() + ("|o" if outline else "|n")
 	if _char_mats.has(key):
 		return _char_mats[key]
 	var m := ShaderMaterial.new()
@@ -315,10 +330,15 @@ static func _char_material(tex: Texture2D, col: Color) -> ShaderMaterial:
 	if tex != null:
 		m.set_shader_parameter("albedo_tex", tex)
 	# 角色比箱子小得多，描边要细一点，否则远看是一团黑边。
-	var ol := ShaderMaterial.new()
-	ol.shader = MESH_LIB.OUTLINE_SHADER
-	ol.set_shader_parameter("width", 0.009)
-	m.next_pass = ol
+	#
+	# 但描边不是无条件的：反向外扩靠的是**法线方向**，遇到法线不规整的资产
+	# （Quaternius 那套就踩到了）会炸成一堆飞出去的黑碎片 —— 满屏都是，
+	# 而模型本身画得好好的，看不出是描边干的。所以由资产用 `"outline": false` 关掉。
+	if outline:
+		var ol := ShaderMaterial.new()
+		ol.shader = MESH_LIB.OUTLINE_SHADER
+		ol.set_shader_parameter("width", 0.009)
+		m.next_pass = ol
 	_char_mats[key] = m
 	return m
 
