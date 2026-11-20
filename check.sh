@@ -33,7 +33,7 @@ no_engine_errors() {   # $1=输出  $2=步骤名
 # 而且错误只是 `No such file or directory`，看起来像环境问题。
 mkdir -p build
 
-step "1/13 编译基础内容（解析 → 继承 → 校验 → 产物）"
+step "1/14 编译基础内容（解析 → 继承 → 校验 → 产物）"
 # 先验证编译器本身没退化成"永远接受"，再编译真内容。
 # 一个从来没拒绝过东西的校验器，和不存在没有区别 —— 而且它还是绿的。
 if out=$(python3 tools/contentc.py --selftest 2>&1); then
@@ -45,7 +45,7 @@ fi
 python3 tools/contentc.py --content content \
     --out build/content.pack.json --bin build/content.pack.bin --report || fail=1
 
-step "2/13 编译每个 mod（各自独立产物）"
+step "2/14 编译每个 mod（各自独立产物）"
 # mod 是可独立发布的单元，所以它有自己的一步编译。这里不合并成一个包：
 # 合并是运行时的事（按授权顺序叠加），编译期合并会让"谁覆盖了谁"变得不可见。
 for d in mods/*/; do
@@ -53,7 +53,7 @@ for d in mods/*/; do
     python3 tools/contentc.py --mod "$d" --base content || fail=1
 done
 
-step "3/13 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
+step "3/14 架构纪律（目录名 / 文件长度 / 域大小 / 引擎不认内容 / 依赖方向 / mod 唯一入口）"
 # 先验证检查器本身没退化成"永远通过"，再跑真正的检查。
 if python3 tools/lint_arch.py --selftest > build/lint_selftest.log 2>&1; then
     echo "检查器自测：通过（R1-R7 每条都能抓到违规）"
@@ -63,7 +63,7 @@ else
 fi
 python3 tools/lint_arch.py || fail=1
 
-step "4/13 同步内容包到 Godot 工程"
+step "4/14 同步内容包到 Godot 工程"
 cp build/content.pack.json game/content.pack.json || fail=1
 
 # 行为 mod 的源码是运行时从磁盘编译的，根目录得显式给 —— 否则 CI 里找不到文件，
@@ -78,7 +78,7 @@ if [ ! -x "$GODOT" ]; then
     exit 1
 fi
 
-step "5/13 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
+step "5/14 Godot 无头自检（内容 / 契约 / 网格 / 钩子 / mod）"
 # --trust=all：验收必须真的跑到脚本通道。不授权的话带脚本的 mod 会被
 # 授权闸门挡住，自检发现"一个脚本都没加载"就判失败 —— 那种绿毫无意义。
 #
@@ -92,7 +92,7 @@ if ! echo "$out" | grep -q '自检通过'; then
     fail=1
 fi
 
-step "6/13 系统层（怪会动 → 会死 → 会掉）"
+step "6/14 系统层（怪会动 → 会死 → 会掉）"
 # `move` / `ai` / `health` / `loot` 在此之前是死数据：契约声明了、内容填了、
 # 引擎一行都没读。菜单里的"骨行者"放下去是个雕像。
 # 四条断言各守各的：是刚体（能抓能扔）、会动（系统写了速度）、
@@ -111,7 +111,7 @@ if ! echo "$out" | grep -q 'ACTOR RESULT OK'; then
     fail=1
 fi
 
-step "7/13 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
+step "7/14 存档往返（推箱子 + 放固定物 + 背包 → 存 → 再推 → 读档）"
 # 这一项必须真跑。自检只走到 Plan 层，不实例化玩家、不跑物理，
 # 所以坐标编码、刚体重建、handle 作废全在它的覆盖之外 ——
 # 而这类代码的错法是"看起来存了，读回来差一点"，只有对比数字能发现。
@@ -126,7 +126,7 @@ if ! echo "$out" | grep -q 'RESULT 位置 OK / 数量 OK / 玩家 OK / 固定物
     fail=1
 fi
 
-step "8/13 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
+step "8/14 生成菜单与背包（放 → 收 → 堆叠上限 → 背包放回 → 拆）"
 # 菜单是纯运行时 UI，自检一个节点都不建。它坏起来很安静：
 # "能打开但点了没反应"、"关掉之后操作还卡着"，两种都不报错。
 # 收 / 放回 / 堆叠也在这里验：预算归还、库存扣减、堆叠上限、
@@ -144,7 +144,7 @@ if ! echo "$out" | grep -q 'MENU RESULT OK'; then
     fail=1
 fi
 
-step "9/13 剔除（逐件判过）与性能成本（结构指标，不设毫秒断言）"
+step "9/14 剔除（逐件判过）与性能成本（结构指标，不设毫秒断言）"
 # 剔除坏起来不报错：该剔的没剔只是帧时慢慢涨，剔多了玩家只看到世界在闪。
 # 所以它必须有断言 —— 而且要测两条**不同**的路：
 # 距离（远处那件）和视锥（侧面那件）。只测远处的话，视锥写坏也发现不了，
@@ -173,7 +173,7 @@ out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/perf.gd 
 echo "$out" | grep -E '^(PERF)'
 no_engine_errors "$out" "剔除与性能成本" || fail=1
 
-step "10/13 L4 扩展（mod 自带组件 / 系统 / 规则状态 / 权限边界）"
+step "10/14 L4 扩展（mod 自带组件 / 系统 / 规则状态 / 权限边界）"
 # 这一项必须真的跑一个 mod 系统：自检只到 Plan 层，调度器一个节点都不建。
 # 四条断言各守各的 —— 声明进 schema、脚本编译进调度器、固定节拍写了状态、
 # 没声明的读写与错类型值被挡住。最后一条尤其重要：开放不等于把节点交出去。
@@ -186,7 +186,7 @@ if ! echo "$out" | grep -q 'EXT RESULT OK'; then
     fail=1
 fi
 
-step "11/13 外观开放（文件夹里的模型真的盖掉引擎内置几何）"
+step "11/14 外观开放（文件夹里的模型真的盖掉引擎内置几何）"
 # 这一项必须真的加载一份外部 glTF：自检只到 Plan 层，看不见"换外貌"这件事。
 # 断言各守各的 —— 覆盖被发现、三角形数与内置不同、世界里刚体的视觉网格
 # **就是**资源层给出的那个对象（漏改一个调用点就会红）、回退与优先级有边界。
@@ -199,7 +199,7 @@ if ! echo "$out" | grep -q 'ASSET RESULT OK'; then
     fail=1
 fi
 
-step "12/13 真实玩法扩展（agent 新增 mod 能改变物理世界）"
+step "12/14 真实玩法扩展（agent 新增 mod 能改变物理世界）"
 # 前面只证明 L4 通道“能装载、能写自己的状态”；这一步证明它能做出真实玩法：
 # 一个只走公开契约、脚本与 api 的 mod，按固定节拍推开附近任意刚体。
 # 探针不认识内容 id，只按组件语义找机关与目标，因此以后 agent 再加刚体也能参与。
@@ -212,7 +212,7 @@ if ! echo "$out" | grep -q 'RULE RESULT OK'; then
     fail=1
 fi
 
-step "13/13 性能结构（材质共用 / 染色隔离 / 视锥每帧一次 / 剔除变快 / 无孤儿）"
+step "13/14 性能结构（材质共用 / 染色隔离 / 视锥每帧一次 / 剔除变快 / 无孤儿）"
 # 这一步守的是**结构**，不是毫秒。这台机器没有 GPU，无头主循环自己就有
 # ~6.8 ms 的地板（空场景实测），墙上帧时测不出 1 ms 级差别 ——
 # 项目之前把那个数字当基线追了好几轮，实际上一直在测环境。
@@ -227,9 +227,23 @@ if ! echo "$out" | grep -q 'BUDGET RESULT OK'; then
     fail=1
 fi
 
+step "14/14 角色资产（带动画的人 / 脚贴地 / 卡通材质 / 能回退 / 骨骼真的在动）"
+# 这一轮之前，玩家是一坨"会平移的几何"：功能全对，动画全无。
+# 所以这一步守的不是模型好不好看，而是**人是不是真的在动** ——
+# 直接采样骨骼姿势跨帧比较，而不是看 AnimationPlayer 当前播的片段名。
+# 负向验证过：掐掉 `_ap.play()`，状态名仍然全对，只有"动"这一条会红。
+out=$(timeout 180 "$GODOT" --headless --path game --script res://probes/character.gd \
+    -- --fresh 2>&1)
+echo "$out" | grep -E '^CHAR'
+no_engine_errors "$out" "角色资产" || fail=1
+if ! echo "$out" | grep -q 'CHAR RESULT OK'; then
+    echo "角色资产未通过"
+    fail=1
+fi
+
 echo
 if [ "$fail" -ne 0 ]; then
     printf '\033[31m验收失败\033[0m\n'
     exit 1
 fi
-printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、怪会动会死会掉、存档能往返、菜单能生成、剔除判得对、L4 扩展能装载能跑且有边界、外观开放能换几何、真实玩法能只靠公开扩展通道、性能结构不退化、引擎无报错\n'
+printf '\033[32m验收通过\033[0m —— 内容可编译、mod 可独立编译、架构无违规、契约无冲突、引擎能加载、怪会动会死会掉、存档能往返、菜单能生成、剔除判得对、L4 扩展能装载能跑且有边界、外观开放能换几何、真实玩法能只靠公开扩展通道、性能结构不退化、角色带骨骼动画且脚贴地、引擎无报错\n'

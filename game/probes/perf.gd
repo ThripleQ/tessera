@@ -125,7 +125,14 @@ static func _material_stats(node_root: Node) -> Dictionary:
 			stack.append(c)
 		if n is MeshInstance3D:
 			var mi := n as MeshInstance3D
-			var m = mi.material_override if mi.material_override != null else mi.material
+			# 三层都要看：material_override 是整节点覆盖，surface_override 是逐面覆盖，
+			# diff 自带的材质在 mesh 里。原来只写了 `mi.material` —— 那个属性根本不存在，
+			# 之前没炸是因为全世界都有 material_override，三元短路掉了右半边。
+			var m: Material = mi.material_override
+			if m == null:
+				m = mi.get_surface_override_material(0)
+			if m == null and mi.mesh != null:
+				m = mi.mesh.surface_get_material(0)
 			if m != null:
 				uses += 1
 				seen[m.get_instance_id()] = true
