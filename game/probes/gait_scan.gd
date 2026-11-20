@@ -32,11 +32,12 @@ func _initialize() -> void:
 			sk = n as Skeleton3D
 			break
 		var s: float = float(c["scale"])
-		print("DUMP %s：%d 片段 / %.2f m / scale %.4f"
-			% [id, (c["animations"] as PackedStringArray).size(), float(c["height"]), s])
+		var binds := _bind_poses(root)
+		print("DUMP %s：%d 片段 / %.2f m / scale %.4f / binds %d"
+			% [id, (c["animations"] as PackedStringArray).size(), float(c["height"]), s, binds.size()])
 		var rows: Array = []
 		for clip in ap.get_animation_list():
-			var m := STRIDE.clip_motion(ap.get_animation(clip), sk)
+			var m := STRIDE.clip_motion(ap.get_animation(clip), sk, binds)
 			if not m["ok"]:
 				continue
 			var spd: float = float(m["speed"]) * s
@@ -50,3 +51,23 @@ func _initialize() -> void:
 			print("DUMP   %-28s %.3f m/s" % [r["clip"], r["speed"]])
 		root.free()
 	quit(0)
+
+
+## 骨骼 → 绑定矩阵：把骨骼位移换算到网格空间的必经之路。
+##
+## 少了它，Quaternius 那套（骨架挂在 100 倍缩放节点下）会量出 0.006 这种
+## "看起来很正常"的数，然后被下面的 `spd < 0.05` 悄悄全过滤掉 ——
+## 扫描结果是一张空表，看着像"这个角色没有移动动画"。
+func _bind_poses(root: Node) -> Dictionary:
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.skin == null:
+			continue
+		var out := {}
+		for i in mi.skin.get_bind_count():
+			var b := mi.skin.get_bind_bone(i)
+			if b >= 0:
+				out[b] = mi.skin.get_bind_pose(i)
+		if not out.is_empty():
+			return out
+	return {}
