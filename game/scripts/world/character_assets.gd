@@ -17,7 +17,8 @@ extends RefCounted
 
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
 const ASSETS = preload("res://scripts/world/assets.gd")
-
+## 步态（速度表）在 gait.gd —— 那个文件只管"腿有多快"，这里只管"把人加载出来"。
+const GAIT = preload("res://scripts/world/gait.gd")
 ## 角色资产目录（仓库根的 assets/characters/），和 mod 的 mesh 覆盖分开。
 ##
 ## 为什么不放进 game/ 里用 res://：那会让 Godot 的导入器在编辑器打开时
@@ -145,6 +146,16 @@ static func character(char_id: String) -> Dictionary:
 
 	var sw := _retint(root)
 
+	# 步速档位：自动测，不查表。第一次加载某个角色时算一遍并缓存，
+	# 之后同一个 id 直接复用（character() 每次都重建节点，但测量结果与节点无关）。
+	# 哪几条算步态由资产声明（opts.gait）；没声明才退回物理筛选。
+	var loco: Dictionary = {}
+	var prev: Dictionary = _char_meta.get(char_id, {})
+	if prev.has("locomotion"):
+		loco = prev["locomotion"]
+	else:
+		loco = GAIT.measure(root, ap, s, opts.get("gait", []), CHARACTER_TARGET_HEIGHT)
+
 	out["ok"] = true
 	out["root"] = root
 	out["animations"] = anims
@@ -154,16 +165,18 @@ static func character(char_id: String) -> Dictionary:
 	out["foot"] = box.position.y * s
 	out["surfaces"] = sw
 	out["hidden"] = hidden
+	out["locomotion"] = loco
 	out["source"] = path.get_file()
 	_char_meta[char_id] = {
 		"animations": anims, "height": h, "scale": s,
 		"scaled_height": h * s, "foot": box.position.y * s, "surfaces": sw,
-		"hidden": hidden, "source": path.get_file(),
+		"hidden": hidden, "locomotion": loco, "source": path.get_file(),
 	}
 	return out
 
 
-## 资产自带的选项文件 `<id>.json`，可选，只有一项：`hide_prefix`。
+
+## 资产自带的选项文件 `<id>.json`，可选，两项：`hide_prefix` / `gait`。
 ##
 ## 为什么需要它：现成角色包惯例是把**全部可选装备**都绑在同一个骨架上，
 ## 一加载就是"左手三面盾、右手两把剑"。资源没坏 —— 是资源本来就等引擎

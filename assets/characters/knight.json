@@ -1,4 +1,7 @@
 {
   "note": "KayKit 的 Adventurers 角色包把全部武器与盾牌都绑在同一个骨架上，一加载就是五把武器四张盾。这里只按名字前缀隐藏，不涉及具体文件名。",
-  "hide_prefix": ["1H_", "2H_", "Badge_", "Rectangle_", "Round_", "Spike_"]
+  "hide_prefix": ["1H_", "2H_", "Badge_", "Rectangle_", "Round_", "Spike_"],
+
+  "gait_note": "哪几条是『走路 / 跑步』。这是资产的事，不是代码的事：包里 76 条动画，挥刀和闪避的脚也会在地上蹭一下，纯靠物理量分不开（实测过，闪避的『匀速后撤』比走路还规整）。所以由资产点名，代码只负责实测它们各自多快。顺序无所谓，实际档位按测出来的速度排。",
+  "gait": ["Walking_A", "Running_B", "Running_A"]
 }

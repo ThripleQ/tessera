@@ -20,6 +20,11 @@ const BAG = preload("res://scripts/player/bag.gd")
 ## 换角色只改这一行 —— 不用碰骨架、动画、材质，那些都在资产层归一化好了。
 const CHARACTER_ID := "knight"
 
+## 兜底速度：**只在角色资产缺失、拿不到步速档位时**才用得上。
+##
+## 有资产时这两个数会被动画反推出来的速度覆盖（见 `_apply_gait`）。
+## 4.6 / 8.2 是第十四轮凭手感定的，而 Knight 的动画只隐含 0.55 / 2.42 ——
+## 差 8 倍和 3.4 倍，那就是"腿在迈、人在冰上滑"的全部原因。
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 8.2
 const GROUND_ACCEL := 16.0
@@ -58,6 +63,9 @@ var _visual: Node3D
 var _rig
 var _hands
 var _bag
+## 实际使用的移动速度。开局等于常量，`_apply_gait()` 会把它们改成动画反推值。
+var _walk_speed := WALK_SPEED
+var _sprint_speed := SPRINT_SPEED
 
 ## 收进背包的时候发一下。UI 靠它给反馈 —— 玩家不需要信号，
 ## 但"按了之后屏幕上有东西动"是"这个键有用"的唯一证据。
@@ -113,6 +121,7 @@ func _ready() -> void:
 	_visual.add_child(_rig)
 	if _rig.setup(CHARACTER_ID, PLAYER_COLOR, EYE_COLOR):
 		print("玩家外观：%s（%d 个动画片段）" % [CHARACTER_ID, _rig.clip_count()])
+		_apply_gait()
 	else:
 		print("玩家外观：角色 `%s` 用不了，退回内置几何" % CHARACTER_ID)
 
@@ -183,6 +192,26 @@ func _unhandled_input(event: InputEvent) -> void:
 		_hands.release(false)
 
 
+## 让移动速度跟着动画走，而不是让动画去追速度。
+##
+## 这是"脚不打滑"的全部秘密，也是最容易被忽略的一步：只调播放倍率只能修一半，
+## 因为真正错的是**速度本身**。人跑 4.6 m/s，而这套动画最快只画到 2.42 m/s，
+## 想对上就得把倍率拉到 1.9 倍 —— 腿每秒迈 285 步，那不是跑步，是蜂鸟。
+##
+## 所以反过来：腿迈多快，人就跑多快。速度不再是一个凭感觉的数字，
+## 它是"这套动画的步幅 × 步频"算出来的。换角色包，速度自动跟着变。
+func _apply_gait() -> void:
+	var walk: float = _rig.gait_walk()
+	var run: float = _rig.gait_run()
+	if walk <= 0.0 or run <= walk:
+		print("移动速度：拿不到步速档位，用默认 %.1f / %.1f m/s" % [_walk_speed, _sprint_speed])
+		return
+	_walk_speed = walk
+	_sprint_speed = run
+	print("移动速度：走路 %.2f / 冲刺 %.2f m/s（由 %d 档动画反推）"
+		% [walk, run, _rig.tier_count()])
+
+
 func _physics_process(delta: float) -> void:
 	rotation.y = _yaw
 	_arm.rotation.x = _pitch
@@ -200,7 +229,7 @@ func _physics_process(delta: float) -> void:
 		_coyote = 0.0
 
 	var wish := Vector3.ZERO if input_blocked else _wish_direction()
-	var speed := SPRINT_SPEED if Input.is_physical_key_pressed(KEY_SHIFT) else WALK_SPEED
+	var speed := _sprint_speed if Input.is_physical_key_pressed(KEY_SHIFT) else _walk_speed
 	var target := wish * speed
 	var accel := GROUND_ACCEL if is_on_floor() else AIR_ACCEL
 
