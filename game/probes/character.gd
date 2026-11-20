@@ -52,6 +52,7 @@ func _process(_delta: float) -> bool:
 		_check_size()
 		_check_material()
 		_check_fallback()
+		_check_catalog()
 		# 停掉玩家的物理，否则它每帧都按"没输入"把状态刷回 idle，
 		# 这里想验的状态机就永远看不到。
 		_player.set_physics_process(false)
@@ -78,12 +79,10 @@ func _process(_delta: float) -> bool:
 
 
 func _find_rig() -> bool:
-	for c in _main.get_children():
-		if c is CharacterBody3D:
-			_player = c
-			break
+	# 按名字找，不按类型找 —— 理由见 locomotion.gd 同名函数。
+	_player = _main.get_node_or_null("player")
 	if _player == null:
-		print("CHAR 结构：找不到玩家（CharacterBody3D）")
+		print("CHAR 结构：找不到玩家（main 下没有名为 player 的节点）")
 		return false
 	_rig = _player.get_node_or_null("visual/rig")
 	if _rig == null:
@@ -129,9 +128,11 @@ func _check_size() -> void:
 
 	# 当前包围盒只做"没陷地 / 没差一个量级"的粗检。
 	# 动画一播，手臂抬起、披风摆开都会改变它 —— 拿它做精确断言会假红。
+	# 上限放到 1.45：**帽子可以超出头顶**。法师的尖顶帽比人高 0.6 m，
+	# 用 1.25 判会把一个完全正常的角色判成"尺寸错了"，而尺子本身没觉得不对。
 	var box := CHARACTERS.character_box(body)
 	_say("落地", "%s 当前 y[%.3f .. %.3f]" % [body.name, box.position.y, box.end.y],
-		box.position.y > -0.06 and box.size.y > want * 0.85 and box.size.y < want * 1.25)
+		box.position.y > -0.06 and box.size.y > want * 0.85 and box.size.y < want * 1.45)
 
 
 func _check_material() -> void:
@@ -155,6 +156,61 @@ func _check_fallback() -> void:
 	r.free()
 	_say("回退", "未知角色 → 内置几何 %s" % ("在" if has_fallback else "不在"),
 		not used and has_fallback)
+
+
+## 目录里每个角色都要能用 —— 这才是"加角色不用改代码"的验收。
+##
+## 只测玩家身上那一个，等于只测了 knight：新加的角色哪怕人陷进地里、
+## 手里举着四把剑、走起来在冰上滑，这一步照样是绿的。
+## 所以这里不认 id：`assets/characters/` 里有什么，就把每一个都当成
+## "玩家"试一遍 —— 探针是这套通道真正的用户，而不是某个角色的粉丝。
+func _check_catalog() -> void:
+	var ids := CHARACTERS.character_ids()
+	_say("目录", "%d 个角色：%s" % [ids.size(), ", ".join(ids)], ids.size() > 0)
+	for id in ids:
+		_check_one(String(id))
+
+
+## 单个角色的体检。全部用**元数据**判，不播动画 ——
+## 目录里可以放十几个角色，逐个播一遍会把这一步拖到分钟级。
+func _check_one(char_id: String) -> void:
+	var r = RIG.new()
+	var used: bool = r.setup(char_id, Color.WHITE, Color.BLACK)
+	var ap: AnimationPlayer = null
+	for n in r.find_children("*", "AnimationPlayer", true, false):
+		ap = n as AnimationPlayer
+		break
+	var sk: Skeleton3D = null
+	for n in r.find_children("*", "Skeleton3D", true, false):
+		sk = n as Skeleton3D
+		break
+	var meta := CHARACTERS.character_meta(char_id)
+	var want: float = CHARACTERS.CHARACTER_TARGET_HEIGHT
+	var got: float = float(meta.get("scaled_height", 0.0))
+	var foot: float = float(meta.get("foot", 99.0))
+	var missing: Array[String] = []
+	for clip in WANT_CLIPS:
+		if ap == null or not ap.has_animation(clip):
+			missing.append(clip)
+	var bones := 0 if sk == null else sk.get_bone_count()
+	# 手上不该有可见网格：这是"举着四把剑"的唯一判据。
+	# 判**位置**（handslot 之下）而不是名字，因为名字每家都不一样。
+	var in_hand := 0
+	for slot in r.find_children("handslot*", "", true, false):
+		for n in (slot as Node).find_children("*", "MeshInstance3D", true, false):
+			if (n as MeshInstance3D).visible:
+				in_hand += 1
+	# 速度不写死：每个角色的腿不一样长，这里只验"算得出来且跑得比走快"。
+	var w: float = r.gait_walk()
+	var run: float = r.gait_run()
+	var ok: bool = used and bones > 0 and missing.is_empty() \
+		and absf(got - want) <= 0.01 and absf(foot) <= 0.01 \
+		and in_hand == 0 and w > 0.0 and run > w
+	_say(char_id, "%s｜骨骼 %d / 缺片段 %s｜身高 %.3f（脚 %.3f）｜手上 %d｜步态 %.2f→%.2f" % [
+		"资产" if used else "回退", bones,
+		"无" if missing.is_empty() else ", ".join(missing),
+		got, foot, in_hand, w, run], ok)
+	r.free()
 
 
 func _sample_pose() -> Array:

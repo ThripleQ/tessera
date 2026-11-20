@@ -23,9 +23,14 @@ const RETICLE = preload("res://scripts/ui/reticle.gd")
 const SYSTEMS = preload("res://scripts/systems/runner.gd")
 const ASSETS = preload("res://scripts/world/assets.gd")
 const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
+const SKYLIGHT = preload("res://scripts/world/skylight.gd")
+const NPC = preload("res://scripts/player/npc.gd")
 const SELFTEST = preload("res://scripts/dev/selftest.gd")
 
 const PACK_PATH := "res://content.pack.json"
+
+## 世界里最多出现几个"别人"。见 `_add_cast()`。
+const CAST_MAX := 4
 
 ## tick 的固定节拍。mod 拿不到每帧的机会 —— 那是帧率的敌人，
 ## 而且绝大多数 mod 想做的事（计时、巡视、状态更新）0.25 秒完全够。
@@ -197,11 +202,11 @@ func _mod_ids(candidates: Array) -> Array[String]:
 	return out
 
 
-## 场景组装：环境 + 主光 + 世界 + 玩家。全部是引擎的"怎么跑"。
+## 场景组装：天光 + 世界 + 人 + 玩家。全部是引擎的"怎么跑"。
 func _setup_scene() -> void:
 	get_tree().auto_accept_quit = false
-	add_child(_make_environment())
-	add_child(_make_sun())
+	add_child(SKYLIGHT.environment())
+	add_child(SKYLIGHT.sun())
 
 	_world = WORLD_SCRIPT.new()
 	_world.name = "world"
@@ -222,6 +227,7 @@ func _setup_scene() -> void:
 	add_child(_player)
 	_player.position = _start_position(_world)
 	_world.attach_camera(_player.camera())
+	_add_cast()
 
 	# 系统层在世界和玩家都就位之后才能跑：它要读 world.bodies，
 	# 而那个数组在 realize 之后才有人。晚一帧启动没关系，缺了它全盘皆输。
@@ -242,6 +248,8 @@ func _setup_scene() -> void:
 	# 收东西的反馈走信号，不让玩家直接持有 UI ——
 	# UI 依赖玩家（要读位置），玩家再依赖 UI 就绕成了环。
 	_player.collected.connect(menu.on_collected)
+	# 换角色的提示走同一条路：玩家发信号，装配层接给 UI，两方互不认识。
+	_player.character_changed.connect(menu.on_character_changed)
 
 	# 准星是手那条射线的显示。它挂在 main 而不是 world 下：
 	# 它不是世界的一部分（不进存档、不参与物理），只是玩家看见的一个指示。
@@ -339,42 +347,37 @@ func _process(delta: float) -> void:
 		bus.emit("tick", {"dt": TICK_INTERVAL, "frame": _frames})
 
 
-## 卡通渲染要的是"天光充足、阴影明确"，不是写实的那种暗调氛围。
-## 背景用天空蓝而不是黑，是因为大片暗背景会把角色的暗部染色吃掉，
-## 人物的剪影就糊在背景里了。
-func _make_environment() -> WorldEnvironment:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.52, 0.72, 0.92)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.66, 0.78, 0.98)
-	# 环境光必须压低：卡通渲染的暗部是由色阶的 shade_tint 决定的，
-	# 环境光一大就把暗部冲淡，色阶就没了，画面回到"平淡的写实"。
-	env.ambient_light_energy = 0.26
-	env.fog_enabled = true
-	env.fog_light_color = Color(0.60, 0.74, 0.90)
-	env.fog_density = 0.0022
-
-	var node := WorldEnvironment.new()
-	node.name = "environment"
-	node.environment = env
-	return node
-
-
-## 主光开阴影：卡通渲染里阴影是"硬边"的另一半，没有它，所有东西都像贴纸。
-## Compatibility 下阴影只有一张深度图，比 Forward+ 便宜得多，这是选它的理由之一。
-func _make_sun() -> DirectionalLight3D:
-	var sun := DirectionalLight3D.new()
-	sun.name = "sun"
-	sun.rotation_degrees = Vector3(-48.0, -36.0, 0.0)
-	# 3.0 看起来很高，但 light() 里除以了 PI，净系数约 0.95 ——
-	# 卡通渲染要让亮面直接显示 albedo 原色，所以这个值不是"过亮"。
-	sun.light_energy = 3.0
-	sun.light_color = Color(1.0, 0.97, 0.90)
-	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 60.0
-	return sun
+## 世界里放几个"别人"。
+##
+## **按资产目录来**：目录里有几个角色就出场几个 —— 新丢一个 glb 进去不用改这里一行。
+## 玩家自己用的那个排在外：同一个角色在眼前出现两次，人会以为那是自己的镜像。
+##
+## 摆位不写死坐标，从开场房间的尺寸算圆周半径。于是换一个房间、换一张地图，
+## 他们自动挪到合适的位置上；半径也夹了上下限，小房间里不会挤成一根绳，
+## 大房间里不会绕着墙根走。
+##
+## 上限 4 个：这一层是"世界里有人"，不是"人山人海的场景"。
+## 真的要做人群，那是另一件事（合批、剔除、行为），不该顺手做掉。
+func _add_cast() -> void:
+	var b: AABB = _world.start_bounds()
+	var center := Vector3(b.get_center().x, 0.0, b.get_center().z)
+	var radius := clampf(minf(b.size.x, b.size.z) * 0.25, 1.8, 4.5)
+	var room := Node3D.new()
+	room.name = "cast"
+	_world.add_child(room)
+	var i := 0
+	for id in CHARACTER_ASSETS.character_ids():
+		if i >= CAST_MAX:
+			break
+		if String(id) == PLAYER_SCRIPT.CHARACTER_ID:
+			continue
+		var npc = NPC.new()
+		npc.name = "npc_%s" % id
+		# 入树之后才能 setup：里面要写 global_position。
+		room.add_child(npc)
+		npc.setup(String(id), center, radius, TAU * float(i) / 3.0)
+		i += 1
+	print("世界里有 %d 个别人（半径 %.1f m 绕圈）" % [i, radius])
 
 
 ## 开场站在第一个房间靠后的位置，面朝房间中心 —— 第一眼就能看见内容。

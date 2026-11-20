@@ -12,6 +12,7 @@ extends CharacterBody3D
 
 const ASSETS = preload("res://scripts/world/assets.gd")
 const MESH_LIB = preload("res://scripts/world/mesh_lib.gd")
+const CHARACTER_ASSETS = preload("res://scripts/world/character_assets.gd")
 const RIG = preload("res://scripts/player/character_rig.gd")
 const HANDS = preload("res://scripts/player/hands.gd")
 const BAG = preload("res://scripts/player/bag.gd")
@@ -72,6 +73,10 @@ var _sprint_speed := SPRINT_SPEED
 ## 用信号而不是让玩家直接持有 UI：UI 依赖玩家（要读血量、位置），
 ## 玩家再依赖 UI 就成了互相牵着，而它们中间的装配层就是 main。
 signal collected(content_id: String)
+
+## 换了角色。UI 靠它给一句提示 —— 玩家看不见控制台，而"按了没反应"
+## 和"换成了同一个角色"在画面上是同一件事，所以必须说出来。
+signal character_changed(char_id: String)
 
 ## 由 main 在 add_child 之前注入。玩家不自己去找总线 ——
 ## 依赖由装配层给，组件之间不互相伸手（structure.md 四）。
@@ -190,6 +195,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.physical_keycode == KEY_R and event.pressed:
 		# 轻轻放下，不给冲量。想摆东西时必须有这个 —— 否则每次都是扔。
 		_hands.release(false)
+	elif event is InputEventKey and event.physical_keycode == KEY_F8 and event.pressed:
+		# 换角色。听起来像玩法，其实是**验收**：见 cycle_character()。
+		cycle_character()
 
 
 ## 让移动速度跟着动画走，而不是让动画去追速度。
@@ -210,6 +218,34 @@ func _apply_gait() -> void:
 	_sprint_speed = run
 	print("移动速度：走路 %.2f / 冲刺 %.2f m/s（由 %d 档动画反推）"
 		% [walk, run, _rig.tier_count()])
+
+
+## 换下一个角色（F8）。返回换上的是谁，空串表示没换成。
+##
+## 这不是"换装系统"，是**通道的验收**：如果加一个角色需要改代码，
+## 那么"丢个文件夹就能玩"这句话就是假的。所以这里的角色名单只有一个来源 ——
+## `assets/characters/` 目录里有什么文件，就能按什么顺序挨个试。
+##
+## 顺便也是最省事的验证方式：不用改常量、不用重启，
+## 按一下就能看出"新角色的身高、朝向、步态、装备"是不是自动对上了。
+##
+## 速度必须跟着重算：不同角色包腿不一样长，沿用上一个角色的速度就是让它滑。
+func cycle_character() -> String:
+	var ids := CHARACTER_ASSETS.character_ids()
+	if ids.size() < 2:
+		return ""
+	# `_rig` 是 untyped 的，这一句必须显式写 String：`:=` 推不出来，
+	# 而那个 Parse Error 只在真正加载这个文件的时候才炸（游戏或探针）。
+	var cur: String = _rig.character_id()
+	var at: int = ids.find(cur)
+	# 找不到当前角色（第一次跑、或者那个文件被删了）时从头开始。
+	var next := String(ids[0] if at < 0 else ids[(at + 1) % ids.size()])
+	if not _rig.swap(next, PLAYER_COLOR, EYE_COLOR):
+		return ""
+	_apply_gait()
+	print("玩家外观：%s（%d 个动画片段）" % [next, _rig.clip_count()])
+	character_changed.emit(next)
+	return next
 
 
 func _physics_process(delta: float) -> void:

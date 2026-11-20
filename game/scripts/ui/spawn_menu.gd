@@ -119,7 +119,7 @@ func _build() -> void:
 	# 而"能放东西"是这个产品目前唯一还没兑现的承诺。
 	_hint = Label.new()
 	_hint.name = "hint"
-	_hint.text = "Tab  生成菜单　　右键 收进背包　　F5 存档　　F9 读档"
+	_hint.text = "Tab  生成菜单　　右键 收进背包　　F8 换角色　　F5 存档　　F9 读档"
 	_hint.add_theme_font_size_override("font_size", 15)
 	_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	_hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))
@@ -331,7 +331,19 @@ func on_collected(content_id: String) -> void:
 	if pack != null and pack.entities.has(content_id):
 		what = pack.label_of(content_id)
 	var n: int = 0 if bag == null else bag.count(content_id)
-	_toast.text = "收进背包：%s  ×%d" % [what, n]
+	toast("收进背包：%s  ×%d" % [what, n])
+
+
+## 换角色。名字照原样显示 —— 角色 id 就是 `assets/characters/` 里的文件名，
+## 玩家自己丢进去一个文件，看见的也应该是那个名字。
+func on_character_changed(char_id: String) -> void:
+	toast("角色：%s" % char_id)
+
+
+## 屏幕上方那行短提示。手动放置的（不是队列）：它只报告"刚刚发生的事"，
+## 后一条盖掉前一条正是想要的 —— 堆三条反而看不清最新的。
+func toast(text: String) -> void:
+	_toast.text = text
 	_toast.visible = true
 	_toast_left = TOAST_TIME
 	if _open:

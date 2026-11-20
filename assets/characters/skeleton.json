@@ -1,0 +1,4 @@
+{
+  "gait_note": "骷髅包比骑士包多 19 条动画，其中一部分是骷髅专属的：Walking_D_Skeletons 是拖着腿的走法，Spawn_Ground / Skeletons_Awaken_* 是躺在地上爬起来。拖步走被当作最低档 —— 一个骷髅慢悠悠挪过来，比一个健步如飞的骷髅更像骷髅。Walking_B / Running_C 和已点名的档位差不到 0.5%，不声明（见 mage.json 同一段说明）。",
+  "gait": ["Walking_D_Skeletons", "Walking_A", "Running_B", "Running_A"]
+}

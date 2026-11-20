@@ -4,6 +4,11 @@ game/content.pack.json
 game/content.pack.bin
 game/.godot/
 game/export/
+# Godot 4.6 给每个脚本 / 资源生成 `.uid` 与 `*.import`。它们是编辑器侧的身份与导入缓存：
+# 工程里没有任何 `uid://` 引用（场景按 `res://` 路径引脚本），无头 CI 每次重新生成。
+# 提交它们只会在每次跑完验收后冒出两打 diff，而 diff 一多，真正要看的那一行就淹了。
+*.uid
+game/*.import
 # mod 的产物同理：它是 content/ 的派生物，提交上来只会在每次编译后产生 diff 噪音。
 # clone 下来先跑 ./run.sh（或 ./check.sh），它会把每个 mod 编一遍。
 mods/*/content.pack.json

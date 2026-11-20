@@ -1,0 +1,4 @@
+{
+  "gait_note": "哪几条算走路 / 跑步。同骨架同动画库，所以档位和骑士同源；但身高不同 → 缩放不同 → 实测速度不同，速度表各自算各自的。只点名三档：Walking_B / Walking_C 和 Walking_A 差不到 0.5%，同时声明会让选档在两段之间来回闪。",
+  "gait": ["Walking_A", "Running_B", "Running_A"]
+}

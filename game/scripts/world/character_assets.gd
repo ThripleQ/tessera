@@ -132,12 +132,17 @@ static func character(char_id: String) -> Dictionary:
 
 	# 可选装备要先摘掉再算包围盒，否则"身高"会把两米长的巨剑也算进去。
 	var opts := _load_options(char_id)
-	var hidden := _hide_by_prefix(root, opts.get("hide_prefix", []))
+	var hidden := _hide_optional(root, opts.get("hide_prefix", []))
 
 	# 归一化身高：现成资产高矮不一，不缩放就会出现"换个模型人就陷进地里"。
 	# 只在**绑定姿势**下量一次 —— 动画一播，手臂和披风会把包围盒改了，
 	# 那之后再量就是"这个人这一刻多高"，不是"这个人多高"。
-	var box := _tree_aabb(root, Transform3D())
+	#
+	# 量的时候不算帽子（见 `_skip_for_height`）。法师的尖顶帽比人头还高
+	# 0.8 m（原生 3.00 m vs 2.20 m），算进去就会把整个法师缩到 0.56 倍 ——
+	# 帽子高度一致了，人矮了一头半。而"换个模型人忽大忽小"正是这一层要消灭的东西。
+	var skip := _skip_for_height(root)
+	var box := _tree_aabb(root, Transform3D(), skip)
 	var h := box.size.y
 	var s := 1.0
 	if h > 0.01:
@@ -176,12 +181,17 @@ static func character(char_id: String) -> Dictionary:
 
 
 
-## 资产自带的选项文件 `<id>.json`，可选，两项：`hide_prefix` / `gait`。
+## 资产自带的选项文件 `<id>.json`，可选，两项：`gait` / `hide_prefix`。
 ##
 ## 为什么需要它：现成角色包惯例是把**全部可选装备**都绑在同一个骨架上，
 ## 一加载就是"左手三面盾、右手两把剑"。资源没坏 —— 是资源本来就等引擎
 ## 决定穿哪一件。而"穿哪一件"不该写死在代码里：换个角色包，前缀就变了。
 ## 所以由资产自己说明，代码只认前缀，不认具体名字。
+##
+## 手里的东西现在由位置规则自动摘（见 `_hide_optional`），所以这个文件的
+## 主力用途变成了 `gait`：哪几条片段算「走路 / 跑步」只有资产自己知道。
+## 不写它也能跑（退回自动筛选），但筛选会把"从地上爬起来"算成一档步态 ——
+## 实测骷髅包里 `Skeletons_Awaken_Standing` 就混进了档位表。
 static func _load_options(char_id: String) -> Dictionary:
 	var p := character_dir().path_join(char_id + ".json")
 	if not FileAccess.file_exists(p):
@@ -197,15 +207,37 @@ static func _load_options(char_id: String) -> Dictionary:
 	return {}
 
 
-static func _hide_by_prefix(root: Node, prefixes: Array) -> int:
-	if prefixes.is_empty():
-		return 0
+## 摘掉这个角色身上"默认不该穿"的东西。返回摘掉的件数。
+##
+## 两条规则，一前一后：
+##
+## 1. **手里的东西（结构规则，不需要任何配置）**。
+##    可选手持物一律挂在 `handslot.l` / `handslot.r` 之下 —— 这是 KayKit 系
+##    （以及绝大多数 Mixamo 绑定）的结构惯例，四个冒险者包和骷髅包全都如此。
+##    按**位置**判而不是按名字判，于是新角色只要丢文件进来就自动正确：
+##    名字每家都不一样（1H_Sword / Mug / Spellbook / Knife），位置才是共性。
+##
+##    这条不是锦上添花：法师包没写选项文件时，法杖把包围盒撑到 3.00 m，
+##    归一化于是把整个法师缩到 0.56 倍 —— 人变矮了，而"看着看着觉得怪"
+##    是最难查到根因的那一类问题。
+##
+## 2. **选项文件里的 `hide_prefix`（手工补充）**。
+##    结构规则盖不住的东西才需要它，比如某个包把披风也做成了可选件。
+##    它现在是补充而不是主力：加角色不需要写它。
+static func _hide_optional(root: Node, prefixes: Array) -> int:
 	var n := 0
+	for slot in root.find_children("handslot*", "", true, false):
+		for node in slot.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi.visible:
+				mi.visible = false
+				n += 1
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
-		var nm := String(mi.name)
+		if not mi.visible:
+			continue
 		for pre in prefixes:
-			if nm.begins_with(String(pre)):
+			if String(mi.name).begins_with(String(pre)):
 				mi.visible = false
 				n += 1
 				break
@@ -291,9 +323,31 @@ static func _char_material(tex: Texture2D, col: Color) -> ShaderMaterial:
 	return m
 
 
+## 量身高时不算进去的东西：手上已经摘掉了（不可见，本来就跳过），
+## 剩下的只有**头上的配件** —— 帽子、头盔、兜帽。
+##
+## 为什么要单独说一句：`head` 在绑定里是一个 BoneAttachment3D，挂在上面的
+## 网格就是"戴在头上的东西"。它们的高度差别极大（骑士头盔比人头高 0.15 m，
+## 法师尖顶帽高 0.8 m），算进总高会让戴高帽的角色被整体缩小 ——
+## 结果就是"三个角色并排站，戴帽子的那个矮一头"。
+##
+## 人有多高由头决定，帽子有多高是造型。所以这里按**位置**排除，
+## 和 handslot 是同一条思路。
+static func _skip_for_height(root: Node) -> Array:
+	var skip: Array = []
+	for head in root.find_children("head", "BoneAttachment3D", true, false):
+		skip.append(head)
+	return skip
+
+
 ## 整棵树的包围盒（rest pose）。骨骼动画在运行时会跑出这个盒子，
 ## 但归一化身高用的是建模姿势 —— 那才是"这个人多高"的稳定答案。
-static func _tree_aabb(node: Node, parent_xform: Transform3D) -> AABB:
+##
+## `skip` 里的节点（连同它们的子树）完全不计入 —— 只给身高归一化用；
+## 探针要的"真实包围盒"走默认空数组，两者不要混。
+static func _tree_aabb(node: Node, parent_xform: Transform3D, skip: Array = []) -> AABB:
+	if skip.has(node):
+		return AABB()
 	var xf := parent_xform
 	if node is Node3D:
 		xf = parent_xform * (node as Node3D).transform
@@ -306,7 +360,7 @@ static func _tree_aabb(node: Node, parent_xform: Transform3D) -> AABB:
 			box = a
 			has = true
 	for child in node.get_children():
-		var sub := _tree_aabb(child, xf)
+		var sub := _tree_aabb(child, xf, skip)
 		if sub.size == Vector3.ZERO:
 			continue
 		box = sub if not has else box.merge(sub)

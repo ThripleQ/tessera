@@ -91,6 +91,33 @@ func setup(char_id: String, fallback_color: Color, fallback_eye: Color) -> bool:
 	return false
 
 
+## 换成另一个角色。返回 true = 换上了（false = 这个 id 用不了，保持原样）。
+##
+## 换角色不是"重开一局"，所以旧的树必须整棵摘掉：骨架、AnimationPlayer、材质
+## 都在那棵树里，留着它就会两套动画同时驱动两个骨架 —— 而画面上只看得见一个，
+## 另一个在后台白烧帧时间，且没有任何报错。
+##
+## 顺序是 remove_child 再 queue_free：queue_free 是**延迟**释放，
+## 只调它的话，这一帧剩下的时间里旧树仍然挂在父节点上，
+## 紧接着的 `find_child("AnimationPlayer")` 可能摸到旧的那个。
+func swap(char_id: String, fallback_color: Color, fallback_eye: Color) -> bool:
+	if char_id == _char_id and _asset:
+		return true
+	for c in get_children():
+		remove_child(c)
+		c.queue_free()
+	_ap = null
+	_asset = false
+	_char_id = ""
+	_state = ""
+	_clip = ""
+	_rate = 1.0
+	_slide = 0.0
+	_tiers = []
+	_gait = {}
+	return setup(char_id, fallback_color, fallback_eye)
+
+
 ## glTF 的片段没有循环标志，Godot 一律给 LOOP_NONE。
 ## 不显式设一遍，走路会在第一秒定格成"抬着一条腿的雕像"。
 ##
@@ -192,15 +219,20 @@ func choose_gait(speed: float) -> Dictionary:
 	}
 
 
-## 换档位不等于换状态名：第 0 档叫 walk，往上都算 run。
-## 名字是给人看的，选哪条片段是 `choose_gait()` 算的。
+## 换档位不等于换状态名：状态是**这个角色自己的走速**之上的才叫跑。
+##
+## 判据必须是**片段名**，不能是状态名。一个角色可能有三档以上（走 / 慢跑 / 跑），
+## 而状态只有 walk / run 两个 —— 按状态切的话，中间那几档永远播不出来：
+## 冲刺时播的还是慢跑那条，靠把倍率拉满硬撑，于是脚重新开始滑，
+## 而状态名、片段名、倍率三样"看起来都对"。骷髅包有四档，一加就踩到。
 func _play_gait(speed: float) -> void:
 	var pick := choose_gait(speed)
-	var want: String = "walk" if int(pick["index"]) == 0 else "run"
-	if want != _state:
-		_state = want
-		_clip = String(pick["clip"])
-		_ap.play(_clip, BLEND)
+	var clip := String(pick["clip"])
+	if clip != _clip:
+		_clip = clip
+		_ap.play(clip, BLEND)
+	# 状态名只是给人看的标签：以资产反推的走速为界，超过它才算跑。
+	_state = "walk" if speed <= float(_gait.get("walk", 0.0)) + 0.0001 else "run"
 	# 同一状态里速度一直在变，倍率必须每帧跟住 —— 只在换片段时设一次，
 	# 加速过程中脚就会滑起来（而状态名全对，看不出来）。
 	_rate = float(pick["rate"])

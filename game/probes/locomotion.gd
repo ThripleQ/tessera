@@ -69,10 +69,11 @@ func _process(_delta: float) -> bool:
 
 
 func _find() -> bool:
-	for c in _main.get_children():
-		if c is CharacterBody3D:
-			_player = c
-			break
+	# 按名字找，不按类型找。"main 的第一个 CharacterBody3D 就是玩家"是条隐式约定：
+	# 世界里的别人（NPC）今天挂在 world 下面，所以还没撞上；哪天有人把某个
+	# CharacterBody3D 直接挂到 main 下，这里就会悄悄取错对象 ——
+	# 症状只是几条数对不上，不报错。
+	_player = _main.get_node_or_null("player")
 	if _player == null:
 		print("LOCO 找不到玩家")
 		return false
