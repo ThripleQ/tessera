@@ -19,7 +19,12 @@ const MOTION = preload("res://scripts/player/motion.gd")
 
 ## 玩家用哪个角色资产。这个名字就是 `assets/characters/` 下的文件名。
 ## 换角色只改这一行 —— 不用碰骨架、动画、材质，那些都在资产层归一化好了。
-const CHARACTER_ID := "knight"
+##
+## 2026-11-21：默认改成**法师**。用户点名"man 好之前用法师就行" ——
+## 上一任候选 `man` 的走路动画是原地踏步（一个循环脚只走 2 毫米），
+## 当主角会一路滑步，已经从目录里撤掉。法师的步态是量出来的（1.04 / 4.48 m/s），
+## 先用它顶着，等找到动作合格的现代人再换。
+const CHARACTER_ID := "mage"
 
 ## 兜底速度：**只在角色资产缺失、拿不到步速档位时**才用得上。
 ##
@@ -66,6 +71,15 @@ var _gun = null
 ## 实际使用的移动速度。开局等于常量，`_apply_gait()` 会把它们改成动画反推值。
 var _walk_speed := WALK_SPEED
 var _sprint_speed := SPRINT_SPEED
+## 起步初速度：从静止到动，第一步就有速度（走速的 70%）。0 = 不给。
+## 理由见 `_physics_process` 里那一段 —— 这是"起步像真人"和"起步像机器人"的分界。
+var _start_speed := 0.0
+## 停车阈值：速度低于它就直接归零，不让它以极慢的速度继续往前飘。
+##
+## 这个数不是随手定的：最低那档步态 0.73 m/s × 倍率下限 0.45 = **0.33 m/s**。
+## 比它慢时倍率会被下限夹住 —— 动画还在往前送，身体却已经慢下来，
+## 脚就在身后拖着走（滑步）。所以要在被夹住之前就停。
+var _stop_speed := 0.30
 
 ## 收进背包的时候发一下。UI 靠它给反馈 —— 玩家不需要信号，
 ## 但"按了之后屏幕上有东西动"是"这个键有用"的唯一证据。
@@ -256,6 +270,9 @@ func _apply_gait() -> void:
 		return
 	_walk_speed = _skin.walk_speed
 	_sprint_speed = _skin.run_speed
+	# 起步初速 = 走速的 70%。给少了像慢动作起步，给多了像被人一把推出去。
+	# 只在真的量到档位时才给 —— 兜底速度（4.6 / 8.2）是写死的，用它起步会窜出去。
+	_start_speed = _walk_speed * 0.7
 	print("移动速度：走路 %.2f / 冲刺 %.2f m/s（由 %d 档动画反推）"
 		% [_walk_speed, _sprint_speed, _skin.tier_count()])
 
@@ -298,7 +315,20 @@ func _physics_process(delta: float) -> void:
 	var accel := GROUND_ACCEL if is_on_floor() else AIR_ACCEL
 
 	var flat := Vector3(velocity.x, 0.0, velocity.z)
-	flat = flat.lerp(target, clamp(accel * delta, 0.0, 1.0))
+	if wish.length_squared() > 0.01 and is_on_floor():
+		# 起步：真人第一步就迈出去，不是从 0 慢慢爬。
+		# 爬的过程里动画倍率会小到 0.2 —— 脚在动但动得像慢动作；
+		# 而速度低于阈值时播的是**待机**，脚不动身体在飘，看着像滑着走。
+		# 所以从静止起步时直接给一个初速度，之后再由加速曲线往上走。
+		if flat.length() < 0.05 and _start_speed > 0.0:
+			flat = wish * _start_speed
+		flat = flat.lerp(target, clamp(accel * delta, 0.0, 1.0))
+	else:
+		# 松手：减速到停。到阈值以下直接归零 —— 再慢下去倍率会趋 0，
+		# 变成慢动作刹车，而身体还在以极慢的速度往前飘。
+		flat = flat.lerp(Vector3.ZERO, clamp(accel * delta, 0.0, 1.0))
+		if flat.length() < _stop_speed:
+			flat = Vector3.ZERO
 	velocity.x = flat.x
 	velocity.z = flat.z
 

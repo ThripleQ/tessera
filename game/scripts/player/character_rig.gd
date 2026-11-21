@@ -25,8 +25,12 @@ const CLIPS = preload("res://scripts/world/clips.gd")
 ## 有档位时选哪条片段由 `choose_gait()` 按速度自动决定。
 const MOVE_AT := 0.35
 const RUN_AT := 5.2
-## 交叉淡入时长。太短会"啪"地硬切，太长会滑步。
-const BLEND := 0.18
+## 这里**没有**交叉淡化的时长常量。
+##
+## 不是忘了做，是量过之后决定不要（理由见 `_switch`）：
+## 淡化期间 seek 失效、淡化期间脚持续拖 0.8 m/s、而且 Godot 的 play()
+## 本来就不重置播放位置 —— 三条加起来，淡化既救不了相位对齐，
+## 又把"1 帧的姿势突变"变成"0.18 秒的滑步"。硬切反而更干净。
 ## 落地动作锁定时间：跳一次落地播 0.3 秒，期间不接受别的状态。
 ## 不锁的话下一帧就会切回 idle，那个动作等于没播。
 const LAND_LOCK := 0.30
@@ -65,6 +69,11 @@ var _gait: Dictionary = {}
 var _clip := ""
 var _rate := 1.0
 var _slide := 0.0
+## 相位对齐开关。默认开着。
+##
+## 它存在的唯一理由是**对照**：探针要能把它关掉，证明"关掉之后脚就会跳"，
+## 而不是相信"开着它脚就不跳"。没做过对照的结论不算结论。
+var _align_phase := true
 ## 这个角色的片段表（角色 → 待机/走/跑/跳/落地 各叫什么）。
 ## 由 `character_assets` 按后缀认出来，认不出的才用内置名。
 var _clips: Dictionary = CLIPS.ROLES
@@ -240,8 +249,7 @@ func _play_gait(speed: float) -> void:
 	var pick := choose_gait(speed)
 	var clip := String(pick["clip"])
 	if clip != _clip:
-		_clip = clip
-		_ap.play(clip, BLEND)
+		_switch(clip, true)
 	# 状态名只是给人看的标签：以资产反推的走速为界，超过它才算跑。
 	_state = "walk" if speed <= float(_gait.get("walk", 0.0)) + 0.0001 else "run"
 	# 同一状态里速度一直在变，倍率必须每帧跟住 —— 只在换片段时设一次，
@@ -251,6 +259,56 @@ func _play_gait(speed: float) -> void:
 	_ap.speed_scale = _rate
 
 
+## 换片段。`align` 为真时把新片段对齐到当前步态相位。
+##
+## 走路和跑步是两条不同的动画，各有各的循环长度。硬切的话，切换那一瞬间
+## 两条动画的腿处在**不同的摆动位置** —— 脚会"跳"一下。这是"看起来不流畅"
+## 里最刺眼的一项，而且它不体现在任何速度数字上：脚没滑，速度也对，
+## 只是腿在那一帧抽了一下。
+##
+## 办法只有一个：切换前记下相位（播放位置 / 循环长度），切换后把新片段
+## seek 到同一个相位。这样"左脚刚落地"这个时刻在两条动画里是对齐的。
+##
+## 前提：两条片段一个循环里的**步数相同**（KayKit 的走和跑都是两脚一循环），
+## 于是"时间相位相同"就等于"步相位相同"。步数不同的包不适用，
+## 但那种包本来也不该靠倍率对齐（ADR 0015 的边界）。
+##
+## **顺序不能反：先无淡化地切过去，再 seek。**
+## 实测（探针 tmp_dbg）：`play(name, 0.18)` 之后调 seek，位置会跟着走
+## 但**骨架纹丝不动** —— 交叉淡化期间 seek 根本不驱动骨骼。
+## 所以想对齐相位就得硬切。
+##
+## 于是这里只有一个取舍：**脚的连续性** vs **躯干姿势的一帧突变**。
+## 选前者。姿势突变只持续一帧，而脚跳出去几厘米会被眼睛一直盯着。
+## 状态切换（待机 ↔ 走路、跳跃）仍然用淡化 —— 那两处的姿势差本来就该化开。
+func _switch(clip: String, align: bool) -> void:
+	var phase := _phase() if (align and _align_phase) else -1.0
+	_clip = clip
+	# 一律硬切。三条理由，都是量出来的：
+	#   1) 带淡化的 play 会让 seek 失效（位置在走、骨架不动），而对齐只能靠 seek；
+	#   2) 淡化期间脚会持续往身体中心收，相对速率约 0.8 m/s —— 那是**真的在滑**，
+	#      而且持续 0.18 秒，比 1 帧的姿势突变显眼得多；
+	#   3) Godot 的 play() **不重置播放位置** —— 新片段会从旧位置接着播。
+	#      相位对齐正好修掉这一条：显式 seek 到对齐位置。
+	# 状态切换（待机↔走路、跳跃）也一样硬切：那一帧的姿势变化是"状态切换"
+	# 本来就该有的样子（一帧），而淡化会把它拉成 0.18 秒的拖脚。
+	_ap.play(clip, 0.0)
+	if phase >= 0.0:
+		var a := _ap.get_animation(clip)
+		if a != null and a.length > 0.0:
+			_ap.seek(phase * a.length, true)
+
+
+## 当前片段的相位（0~1）。量不出来时返回 -1。
+func _phase() -> float:
+	if _ap == null or not _ap.is_playing():
+		return -1.0
+	var len := _ap.get_current_animation_length()
+	if len <= 0.0:
+		return -1.0
+	return fmod(_ap.get_current_animation_position(), len) / len
+
+
 func play(want: String) -> void:
 	if not _asset or want == _state:
 		return
@@ -258,11 +316,10 @@ func play(want: String) -> void:
 	if clip.is_empty() or not _ap.has_animation(clip):
 		return
 	_state = want
-	_clip = clip
 	_rate = 1.0
 	_slide = 0.0
 	_ap.speed_scale = 1.0
-	_ap.play(clip, BLEND)
+	_switch(clip, false)
 
 
 ## 这个角色该用多快的速度走 / 冲刺（由它自己的动画反推）。
