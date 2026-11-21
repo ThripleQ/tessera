@@ -58,6 +58,29 @@
   先把候选的**每循环水平位移**量出来（`probes/gait_scan.gd`），
   走一步不到 30 cm 的直接不要 —— 选静态截图是看不出这一点的。
 
+## 包里到底有哪些片段（2026-11-21 全量扫描）
+
+用 `probes/clip_dump.gd` 把三个角色的**每一条**片段都列了出来（名字 / 长度 /
+隐含地面速度 / 支撑脚占比 / 是否循环）。结论分三块，**别再重复扫描了**：
+
+- **步态**：只有 `Walking_A` / `Walking_B` / `Walking_C` / `Walking_Backwards` /
+  `Running_A` / `Running_B`（+ skeleton 的 `Running_C`）这四条"走/跑"，
+  以及 `Running_Strafe_Left` / `Running_Strafe_Right`（**斜向跑**，2.6 m/s，
+  前进分量只有 1.3 m/s）。
+- **受击**：`Hit_A`（0.67 s，零位移）和 `Hit_B`（0.87 s，带 0.17 m/s 后退）。
+  **包自带受击动画** —— 以后怪换成带骨架的资产时，挨打时可以播它，
+  配合物理击退（ADR 0018 的 `hit_react`）就是"看得见 + 摸得着"。
+  现在用不上，因为 `shade_lowpoly` 还是两个盒子，没有骨架。
+- **其他**：`Jump_Start` / `Jump_Land` / `Jump_Idle` / `Jump_Full_*`、
+  `Dodge_Forward/Backward/Left/Right`（各 0.40 s，带真实位移 0.25~0.41 m/s）、
+  `Death_A` / `Death_B`、`Lie_Down` / `Lie_StandUp`、`Sit_*`、
+  一整套近战 / 远程 / 双手 / 法术动作。
+
+**没有起步 / 刹车 / 原地转身片段。** 这是当前人物手感的天花板所在
+（见 `docs/status.md` 下一步第 1 条）。KayKit 是动作齐全的**战斗**包，
+不含 GTA5 那种"日常移动"的细分片段 —— 所以"等一个带起步刹车的包"这条路，
+KayKit 满足不了，得另找。
+
 ## `<id>.json`
 
 不是上游文件，是本地写给资产加载器的选项（格式见

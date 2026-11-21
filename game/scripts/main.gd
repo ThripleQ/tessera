@@ -58,6 +58,9 @@ var _tick_acc := 0.0
 var _frames := 0
 var _world = null
 var _player = null
+## 手里的那把枪。由 `_wire_gun()` 建，装配层留着它是为了接线：
+## 枪的命中信号要送给准心（准心不持有枪，见下面 crosshair 那段）。
+var _gun = null
 ## 系统层。move / ai / health / loot 由它每帧执行 ——
 ## 在此之前那些组件是死数据：菜单里的骨行者放下去是个雕像。
 var _systems = null
@@ -192,6 +195,13 @@ func _setup_scene() -> void:
 	cross.name = "crosshair"
 	cross.player = _player
 	add_child(cross)
+	# 命中标记的触发走信号：枪说"打中了"，准心说"那我闪一下"。
+	# **两边互不认识** —— 准心不持有枪，枪也不知道准心存在。
+	# 直接让准心去问枪"我打中几个了"也能做，但那是**轮询**：
+	# 准心得记住上一次的数字自己比，而 UI 不该替枪记账
+	# （枪的账在 gun.gd，HUD 就是这么读的 —— 见 hud.gd 开头）。
+	if _gun != null:
+		_gun.hit_confirmed.connect(cross.on_hit)
 
 	# 读档：**默认不读**。训练场每次打开都该是干净的 —— 上一局打剩的三只骷髅
 	# 和一地掉落，会让"我打了多久、准不准"这件事没法比较。
@@ -224,6 +234,7 @@ func _wire_gun() -> void:
 	if not gun.setup(_player, _player.camera(), pack, weapon, _systems.vitals()):
 		printerr("武器 `%s` 装不上，这次没有枪" % weapon)
 		return
+	_gun = gun
 	_player.attach_gun(gun)
 	print("手里的枪：%s（伤害 %d / 射速 %.1f 发秒 / 弹匣 %d / 射程 %.0f m）"
 		% [weapon, gun.damage, 1.0 / gun.interval, gun.mag_size, gun.reach])

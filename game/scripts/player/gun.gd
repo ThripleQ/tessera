@@ -17,6 +17,13 @@ extends RefCounted
 const GUN_VIEW = preload("res://scripts/player/gun_view.gd")
 const SFX_SUBDIR := "assets/sfx"
 
+## 打中了"会疼的东西"时发一次。**这个信号只说"打中了"，不说打中的是谁。**
+##
+## 为什么不给详情：枪是唯一知道射线打到哪儿的东西，而 UI 需要的只是
+## "该给玩家一个反馈了"—— 玩家看得见自己打中的是谁，不需要 UI 再播一遍。
+## 带一份详情过去只会诱使 UI 去显示具体目标，那是 HUD 的活，不是准心的。
+signal hit_confirmed
+
 var _player = null
 var _camera: Camera3D = null
 var _pack = null
@@ -202,9 +209,14 @@ func _fire() -> void:
 	if not hit.is_empty() and _vitals != null:
 		# 引擎不判断"打中的是不是怪"——它只问血量系统"这个东西会不会疼"。
 		# 打中墙、打中地板、打中没血量的箱子，返回的都是 ok=false。
-		var r: Dictionary = _vitals.damage(hit.get("collider"), damage)
+		#
+		# **方向一起传过去**：只有开枪的人知道子弹往哪飞，
+		# 而"往哪退"这个反馈要从那个方向反推。少传一样，被打的东西就只会掉血，
+		# 不会被打退 —— 那一枪看起来就"没打中"。
+		var r: Dictionary = _vitals.damage(hit.get("collider"), damage, dir)
 		if bool(r.get("ok", false)):
 			hits += 1
+			hit_confirmed.emit()
 
 	# 后坐与声音属于"打出去了"这件事，不管有没有命中。
 	if _player != null and (recoil_pitch != 0.0 or recoil_yaw != 0.0):

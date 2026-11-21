@@ -17,6 +17,15 @@ extends RefCounted
 
 const system_name := "locomotion"
 
+## 受击状态在刚体身上的 meta 键。**由 vitals 写，这里只读。**
+##
+## 为什么不各自定义一个常量：两个文件写同一个字符串，早晚会有一处改名，
+## 而症状是"打中了但怪没反应"—— 那种 bug 查起来要翻三个文件。
+## 代价是这个系统从此"知道"另一个系统在写什么 ——
+## 但它知道的只是**一个键名**，不是另一个系统的实现，
+## 而这正是 meta 存在的意义（运行时状态挂在东西身上，不住在某个系统里）。
+const META_REACT := "hit_react_state"
+
 ## 朝向变化小于这个角度就不写 rotation。约 1.5 度，肉眼看不出来。
 ##
 ## 这不是"省一点的优化"，而是"别做没用的事"：写 rotation 要穿过物理服务器，
@@ -51,6 +60,32 @@ func step(dt: float) -> void:
 			continue
 
 		var want: Vector3 = _intent(rb, comps, speed, float(mv.get("wander", 0.0)))
+		# 受击反应（击退 + 僵直）。状态是 vitals 写的，这里只读。
+		#
+		# 为什么不在这里写速度：那会把"挨打"变成 locomotion 的知识，
+		# 而两个系统只该通过组件与 meta 交流（契约 check_system_order）。
+		# 所以分工是：vitals 记"被推了多远、愣多久"，这里把它算进速度。
+		#
+		# **僵直清掉的是"它自己想往哪走"，不是"它能不能动"。**
+		# 挨打的时候它一边愣住一边被推着退 —— 这才是"被打退"该有的样子。
+		# 第一版写成"愣住就完全不动"，结果怪被打中后原地定住，一毫米都不退，
+		# 看起来像"这一枪没打中"（玩家会以为打偏了）。
+		var push := Vector3.ZERO
+		var stunned := false
+		if rb.has_meta(META_REACT):
+			var st: Dictionary = rb.get_meta(META_REACT)
+			stunned = float(st.get("stun", 0.0)) > 0.0
+			# 推力按**剩余比例**算出来，不是每帧乘一次。
+			# 每帧乘一次的话，剩余比例自己也在降，等于平方衰减，
+			# 2.5 m/s 一帧就掉到 0.95 —— 推了一下等于没推（实测退 0.15 米）。
+			var total := maxf(float(st.get("total", 0.0)), 0.0001)
+			var left := clampf(float(st.get("stun", 0.0)) / total, 0.0, 1.0)
+			push = st.get("push0", Vector3.ZERO) * left
+		if stunned:
+			want = Vector3.ZERO
+		# 推力永远加。它是"被打"给的速度，不是"它想去哪"的一部分 ——
+		# 所以哪怕它正在愣住（不想动），也照样被推着走。
+		want += push
 		# 只改水平速度。竖直方向是重力的事 —— 写成 0 的话，
 		# 下落、跳跃、被顶起来全都不见了，东西会像贴在地上一样滑。
 		#

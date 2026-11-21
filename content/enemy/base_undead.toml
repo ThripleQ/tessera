@@ -17,6 +17,14 @@ palette = "bone"
 max = 30
 regen = 0.0
 
+# 挨打之后会怎样。血量管"能不能打死"，这一份管"打中了有没有反馈"。
+# knockback 2.5 = 被打中时向后退 2.5 m/s —— 够看见，不会退到墙后面去。
+# stun 0.35 = 愣住 0.35 秒，这段时间它不走路。
+# 两条都写 0 的怪（默认）就是"打了跟没打一样"，玩家会以为打偏了。
+[components.hit_react]
+knockback = 2.5
+stun = 0.35
+
 [components.move]
 speed = 1.2
 wander = 2.0

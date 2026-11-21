@@ -19,7 +19,25 @@ const THICKNESS := 2.0
 const COLOR_OUTLINE := Color(0.03, 0.04, 0.06, 0.85)
 const COLOR_CORE := Color(0.97, 0.99, 1.0, 0.95)
 
+## 命中标记（hitmarker）：打中时在准心周围闪一个 X。
+##
+## 为什么必须有它：准心告诉玩家"子弹往哪飞"，但**打中之后没有任何东西变**——
+## 血量在左上角，击杀数也在左上角，都要用眼睛去"读"。
+## 而打中是整局里最需要立刻确认的一件事（我打中了吗？）。
+## 一个闪一下的 X 就在眼睛盯着的地方，是唯一不用挪视线的确认方式。
+##
+## 显示多久。0.18 秒：短到不挡视线（下一枪之间就淡完了），
+## 长到在 60 帧下能被看见（不到 11 帧的东西会被一帧跳过）。
+const HIT_TIME := 0.18
+## 命中标记的 X 比准心大多少（像素）。大一点才看得出"多了一个东西"，
+## 太小就变成准心自己变粗，看不出是命中了。
+const HIT_GAP := 9.0
+const HIT_LENGTH := 7.0
+const COLOR_HIT := Color(1.0, 0.94, 0.62, 0.95)
+
 var player = null
+## 命中标记还剩多少秒显示。由枪的信号点亮（装配层接线，见 main.gd）。
+var _hit := 0.0
 
 
 func _ready() -> void:
@@ -34,8 +52,24 @@ func _ready() -> void:
 
 ## 只在第一人称显示。第三人称的"瞄哪儿"由世界里的落点圈回答，
 ## 屏中再加一个准心会变成两套指向（而且它们指的常常不是同一个点）。
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	visible = player != null and bool(player.is_first_person())
+	if _hit > 0.0:
+		_hit = maxf(0.0, _hit - delta)
+		# 命中标记画在另一个 Control 上，所以准心本身要重画一次。
+		# 不重画的话标记会停在第一帧的样子（永远满亮），那不叫"闪"。
+		var c := get_child(0) as Control
+		if c != null:
+			c.queue_redraw()
+
+
+## 枪打中了会疼的东西。装配层把这个信号接过来（见 main.gd）——
+## **准心不认识枪**，它只知道"该闪一下"。
+func on_hit() -> void:
+	_hit = HIT_TIME
+	var c := get_child(0) as Control
+	if c != null:
+		c.queue_redraw()
 
 
 func _draw_cross(c: Control) -> void:
@@ -58,3 +92,28 @@ func _draw_cross(c: Control) -> void:
 			c.draw_line(mid + a, mid + b, col, w)
 	# 中心点。准心没有点时，"两条线中间那格"到底对着哪儿要靠猜。
 	c.draw_circle(mid, THICKNESS * 0.5 + 0.6, COLOR_CORE)
+	_draw_hitmarker(c, mid)
+
+
+## 命中标记：四个角上的斜线，画成一个 X 的四臂。
+##
+## 用**斜线**而不是正交短线：正交的短线和准心的四条线平行，
+## 混在一起分不清哪个是哪个。斜的不会。
+func _draw_hitmarker(c: Control, mid: Vector2) -> void:
+	if _hit <= 0.0:
+		return
+	# 越接近消失越淡。"啪"地一下消失不如慢慢淡掉 ——
+	# 后者能让人看清"刚才打中了"，前者只留下"好像闪了一下"。
+	var a := clampf(_hit / HIT_TIME, 0.0, 1.0)
+	var col := Color(COLOR_HIT.r, COLOR_HIT.g, COLOR_HIT.b, COLOR_HIT.a * a)
+	# 四条斜线：从内角指向外角。
+	var arms: Array[Array] = [
+		[Vector2(-HIT_GAP, -HIT_GAP), Vector2(-HIT_GAP - HIT_LENGTH, -HIT_GAP - HIT_LENGTH)],
+		[Vector2(HIT_GAP, -HIT_GAP), Vector2(HIT_GAP + HIT_LENGTH, -HIT_GAP - HIT_LENGTH)],
+		[Vector2(-HIT_GAP, HIT_GAP), Vector2(-HIT_GAP - HIT_LENGTH, HIT_GAP + HIT_LENGTH)],
+		[Vector2(HIT_GAP, HIT_GAP), Vector2(HIT_GAP + HIT_LENGTH, HIT_GAP + HIT_LENGTH)],
+	]
+	for arm in arms:
+		var p0: Vector2 = arm[0]
+		var p1: Vector2 = arm[1]
+		c.draw_line(mid + p0, mid + p1, col, THICKNESS)
