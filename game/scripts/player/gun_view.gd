@@ -4,8 +4,11 @@ extends Node3D
 ## 射速、伤害、后坐在 `gun.gd`，摆位、动画、枪口火焰在这里。
 ##
 ## 为什么分开：视图模型的坐标是相机空间（右下、贴脸、跟着画面抖），
-## 而弹道是世界空间（从相机发出、打到墙为止）。混在一个文件里，
-## 最典型的 bug 是"用枪模型的位置发射线"，于是子弹从膝盖飞出去。
+## 而弹道是世界空间。混在一个文件里，最典型的 bug 是"用枪模型的位置发射线"，
+## 于是子弹从膝盖飞出去。现在两边**只共享一个点**：`muzzle_world()` ——
+## 枪口在世界里的位置，子弹和曳光都从这里出发。
+
+const GUN_FLASH = preload("res://scripts/player/gun_flash.gd")
 ##
 ## 模型来自 J-Toastie（CC-BY 3.0，见 assets/ASSETS.md）：AKM + 绑骨手臂，
 ## 自带 Idle / Shoot / Reload 三段动画。**手臂是模型的一部分，不是另画的** ——
@@ -51,25 +54,16 @@ const SWAY_PER_PX := 0.00012
 const SWAY_MAX := 0.028
 const SWAY_RETURN := 11.0
 
-## 枪口火焰存在多久。0.07 秒 = 四帧 —— 长了就变成"枪嘴里有团火在烧"。
-## 它不是一个特效，是一个**证据**：枪口这个位置真的放出了东西。
-const FLASH_TIME := 0.07
-
-## 枪口在骨架空间里的位置（模型原始单位，未乘 336.5）。
-## 枪管沿 +X 到 0.156 结束，取 0.158 让火焰完全露出枪口。
-const MUZZLE_BONE_POS := Vector3(0.158, -0.002, -0.012)
-
 var _model: Node3D = null
 var _anim: AnimationPlayer = null
 var _player = null
+var _camera: Camera3D = null
 var _clip_idle := ""
 var _clip_shoot := ""
 var _clip_reload := ""
 
 var _kick := 0.0
-var _flash := 0.0
-var _flash_node: Node3D = null
-var _flash_light: OmniLight3D = null
+var _flash = null
 ## 枪口在相机空间里的位置。**这是量出来的，不是猜的**：
 ## 1280×720、FOV 78 下，枪口在画面上落在 (795, 430)；
 ## 按那个像素反投影到 0.52 米深处，得到 (0.181, -0.082, -0.52)。
@@ -78,6 +72,13 @@ var _flash_light: OmniLight3D = null
 ## 336.5 倍的父节点变换吃掉了一半，硬算出来的枪口会飘在枪管旁边。
 ## 看不出来就量一遍 —— 比在四个坐标系之间猜快得多。
 const MUZZLE_VIEW_POS := Vector3(0.181, -0.082, -0.52)
+
+## 枪口在**模型局部**坐标里的位置。开局用上面的相机空间坐标反推一次 ——
+## 之后模型怎么转，枪口都跟着走，火焰和曳光不用再猜。
+var _muzzle_local := Vector3.ZERO
+## 这一帧准心落在哪（相机空间）。由 `gun.gd` 每帧喂进来。
+var _aim_local := Vector3.ZERO
+var _has_aim := false
 
 var _sway := Vector2.ZERO
 var _bob_phase := 0.0
@@ -109,9 +110,14 @@ func _ready() -> void:
 	_model.position = REST_POS
 	# 模型自带的骨骼动画只驱动骨架；外层这套变换是我们自己的"举枪姿势"。
 	_model.set_meta("view_model", true)
+	# 反推枪口在模型局部坐标里的位置。相机空间那个数是量出来的（见上），
+	# 这里把它换算回模型自己的空间；之后旋转、晃动都不会让它跑掉。
+	_camera = get_parent() as Camera3D
+	_muzzle_local = _model.transform.affine_inverse() * MUZZLE_VIEW_POS
 
 	_setup_anim()
-	_make_flash()
+	_flash = GUN_FLASH.new()
+	add_child(_flash)
 
 
 ## 找到三段动画并按用途命名。名字里带 `|`（glTF 的 "Armature|Idle"），
@@ -144,75 +150,33 @@ func _setup_anim() -> void:
 	_anim.play(_clip_idle)
 
 
-## 枪口在相机空间里的位置。叠上举枪姿势的偏移（晃动、后坐），
-## 火焰就会跟着枪一起动。骨骼动画那一两厘米的后坐不管：火焰只亮 70 毫秒。
+## 枪口在相机空间里的位置。模型每帧被举枪姿势重摆，所以从模型变换反算 ——
+## 不是"静止位置 + 偏移"，那样枪一转向火焰就会飘。
 func muzzle_position() -> Vector3:
 	if _model == null:
 		return MUZZLE_VIEW_POS
-	return MUZZLE_VIEW_POS + (_model.position - REST_POS)
+	return _model.transform * _muzzle_local
 
 
-## 枪口那一小片亮：两片加法混合的软光斑 + 一盏只亮三帧的点光。
-##
-## **它挂在视图模型下，不是挂在枪的模型节点里。** 模型缩到 0.026 倍，
-## 子节点的坐标和尺寸会跟着缩 —— 第一版把火焰做成模型的子节点，
-## 结果它只有 2 厘米大，而且位置挪到了枪口以内，在画面里根本找不到。
-func _make_flash() -> void:
-	_flash_node = Node3D.new()
-	_flash_node.name = "muzzle_flash"
-	_flash_node.visible = false
-	add_child(_flash_node)
-
-	_add_flash_quad(Vector2(0.085, 0.085), Color(1.0, 0.93, 0.72, 1.0), 0.0)
-	_add_flash_quad(Vector2(0.045, 0.045), Color(1.0, 0.78, 0.38, 0.9), 0.6)
-
-	_flash_light = OmniLight3D.new()
-	_flash_light.light_color = Color(1.0, 0.80, 0.45)
-	_flash_light.light_energy = 1.3
-	_flash_light.omni_range = 2.0
-	_flash_light.shadow_enabled = false
-	_flash_light.visible = false
-	add_child(_flash_light)
+## 枪口在世界里的位置。曳光弹、子弹的起点都用它 —— 眼睛看到的枪口
+## 和子弹飞出来的地方必须是同一个点。
+func muzzle_world() -> Vector3:
+	return to_global(muzzle_position())
 
 
-## 一片软光斑。用程序生成的径向渐变而不是贴图：
-## 项目不为一个 3 帧的特效多带一张 png，而且渐变在哪个分辨率下都不糊。
-func _add_flash_quad(size: Vector2, tint: Color, spin: float) -> void:
-	var mi := MeshInstance3D.new()
-	var quad := QuadMesh.new()
-	quad.size = size
-	mi.mesh = quad
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	# 不测深度：枪口那片必须在枪身之前画出来，否则它会被枪管自己挡住，
-	# 而画面上看起来像"火焰没触发"（第一版就是这样，找了半天）。
-	mat.no_depth_test = true
-	mat.albedo_color = tint
-	mat.albedo_texture = _glow_texture()
-	mi.material_override = mat
-	mi.rotation.z = spin
-	_flash_node.add_child(mi)
+## 枪口该指向哪。传世界坐标；每帧由 `gun.gd` 用准心的落点喂进来。
+func aim_at_world(point: Vector3) -> void:
+	if _camera == null:
+		return
+	_aim_local = _camera.to_local(point)
+	_has_aim = true
 
 
-func _glow_texture() -> GradientTexture2D:
-	var g := Gradient.new()
-	g.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
-	g.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 0.86, 0.5, 0.55),
-		Color(1.0, 0.45, 0.1, 0.0),
-	])
-	var tex := GradientTexture2D.new()
-	tex.gradient = g
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 64
-	tex.height = 64
-	return tex
+## 枪管（模型 +X）在世界里的方向。探针用它检查"枪口是不是真的对着准心"。
+func barrel_world() -> Vector3:
+	if _model == null:
+		return Vector3.ZERO
+	return (_model.global_transform.basis * Vector3.RIGHT).normalized()
 
 
 ## 鼠标转视角。给多少像素就甩多少 —— 由玩家在输入里调用，
@@ -227,15 +191,8 @@ func look(relative: Vector2) -> void:
 ## 而玩家能看出来的枪感全在那几帧里。
 func kick() -> void:
 	_kick = 1.0
-	_flash = FLASH_TIME
-	if _flash_node != null:
-		# 每发换个角度和大小：同一个贴片连闪十次会被看成"屏幕在抖"。
-		_flash_node.rotation.z = randf() * TAU
-		_flash_node.scale = Vector3.ONE * randf_range(0.85, 1.25)
-		_flash_node.visible = true
-	if _flash_light != null:
-		_flash_light.light_energy = randf_range(1.0, 1.6)
-		_flash_light.visible = true
+	if _flash != null:
+		_flash.flash(muzzle_position())
 	if _anim != null and not _clip_shoot.is_empty():
 		# 换弹优先：换弹动画播到一半被开火打断，看起来像手在抽筋。
 		if _anim.current_animation != _clip_reload:
@@ -274,21 +231,12 @@ func set_shown(shown: bool) -> void:
 	# 火焰和点光也是相机空间的东西，单独关 —— 否则第三人称下
 	# 枪藏起来了，枪口还悬着一片亮。
 	if not shown:
-		if _flash_node != null:
-			_flash_node.visible = false
-		if _flash_light != null:
-			_flash_light.visible = false
+		_has_aim = false
+		if _flash != null:
+			_flash.hide_flash()
 
 
 func tick(delta: float) -> void:
-	if _flash > 0.0:
-		_flash -= delta
-		if _flash <= 0.0:
-			if _flash_node != null:
-				_flash_node.visible = false
-			if _flash_light != null:
-				_flash_light.visible = false
-
 	if _model == null:
 		return
 
@@ -319,19 +267,36 @@ func tick(delta: float) -> void:
 		_sway.x + bob.x,
 		_sway.y + bob.y + breath.y,
 		KICK_BACK * _kick)
-	_model.position = REST_POS + offset
-	_model.rotation = Vector3(
+	var rot := Vector3(
 		KICK_RISE * _kick + _sway.y * 0.55,
 		REST_YAW,
 		REST_ROLL - _sway.x * 0.8 + breath.y * 0.4)
+	var xf := Transform3D(
+		Basis.from_euler(rot) * Basis.from_scale(Vector3.ONE * GUN_SCALE),
+		REST_POS + offset)
+	if _has_aim:
+		xf = _aimed(xf)
+	_model.transform = xf
 
-	if _flash_node != null:
-		# 火焰跟着枪口走。模型每帧都被举枪姿势重摆，所以这里重新算一次，
-		# 而不是只在开始时算一次 —— 否则晃动时火焰会飘在枪管旁边。
-		var muzzle := muzzle_position()
-		_flash_node.position = muzzle
-		if _flash_light != null:
-			_flash_light.position = muzzle
+	if _flash != null:
+		# 火焰跟着枪口走。有了 `_aimed()`，这里拿到的就是枪管真正的末端。
+		_flash.follow(_model.transform * _muzzle_local)
+
+
+## 把枪管转到准心落点上。**绕枪口旋转** —— 枪口不动，火焰和曳光才接得上；
+## 否则每瞄一次，枪口就在画面里挪几厘米。
+##
+## 为什么不是"把整把枪转过去"：枪托会甩到脸上，而且准心和枪口本来
+## 只差几度（3 米处约 3.5°），绕枪口转是最小、最自然的修正。
+func _aimed(xf: Transform3D) -> Transform3D:
+	var m: Vector3 = xf * _muzzle_local
+	var want := (_aim_local - m).normalized()
+	var barrel: Vector3 = (xf.basis * Vector3.RIGHT).normalized()
+	if want.length_squared() < 0.5 or barrel.dot(want) > 0.99999:
+		return xf
+	var q := Quaternion(barrel, want)
+	var nb := Basis(q) * xf.basis
+	return Transform3D(nb, m - nb * _muzzle_local)
 
 
 ## 探针用的只读快照：模型装上了没有、现在播的是哪一段。
@@ -361,16 +326,6 @@ func _find(n: Node, cls: String):
 		return n
 	for c in n.get_children():
 		var r = _find(c, cls)
-		if r != null:
-			return r
-	return null
-
-
-func _mesh_named(n: Node, want: String) -> MeshInstance3D:
-	if n is MeshInstance3D and String(n.name) == want:
-		return n as MeshInstance3D
-	for c in n.get_children():
-		var r := _mesh_named(c, want)
 		if r != null:
 			return r
 	return null

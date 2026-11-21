@@ -20,6 +20,12 @@ const PITCH_MIN_FP := -1.45
 const PITCH_MAX_FP := 1.15
 ## 弹簧臂长度。第三人称镜头在身后这么远。
 const ARM_LENGTH := 3.8
+## 第三人称镜头从右肩上方看，不是正对后脑勺。
+##
+## 为什么必须偏：法师的帽子有一米宽。镜头正对背后时，帽檐 + 袍子
+## 把右手里的枪挡得干干净净 —— 于是"第三人称也有枪"只是代码里的事实，
+## 玩家看不见。偏到右肩之后，枪就在画面右下角，和第一人称的位置呼应。
+const SHOULDER := Vector3(0.55, 0.10, 0.0)
 const MOUSE_SENS := 0.0022
 ## 后坐回位的速度（每秒逼近比例）。8 在 60 帧下约 0.2 秒归位 ——
 ## 快到"能连发"，慢到"能看见枪抬起来又落下"。
@@ -54,6 +60,11 @@ func apply() -> void:
 	if _arm == null:
 		return
 	_arm.spring_length = 0.0 if first_person else ARM_LENGTH
+	# 偏移加在弹簧臂的**根部**，不是相机上：SpringArm3D 每帧会把直接子节点
+	# 摆到 (0, 0, spring_length)，写在相机上的 x 会被它覆盖掉。
+	# 根部偏移在两种视角下都是"眼睛"的位置，第一人称必须回正 ——
+	# 视图模型的枪口是按"相机在眼睛上"量出来的。
+	_arm.position = Vector3.ZERO if first_person else SHOULDER
 	if _visual != null:
 		_visual.visible = not first_person
 	pitch = clampf(pitch, PITCH_MIN_FP if first_person else PITCH_MIN_TP,

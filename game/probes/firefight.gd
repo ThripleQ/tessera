@@ -7,14 +7,18 @@ extends SceneTree
 ## 撞击那条靠 `world.impacts` 队列，射线这条靠 `vitals.damage()` 直接调用。
 ## 只验其中一条，另一条可以在"探针全绿"的情况下彻底不通。
 ##
-## 六条各错各的：
+## 八条各错各的：
 ##   数值来自内容 —— 枪上的伤害 / 弹匣必须等于 TOML 里的数，
 ##                   而不是引擎里某个恰好相同的常量
 ##   打中会疼    —— 一发之后血量正好少了 damage
 ##   打死会记    —— 血量归零之后离开世界，而且击杀数 +1
 ##   会打空      —— 弹匣打光之后开不出枪，换弹之后又满了
 ##   后坐会回    —— 抬起是真的，回来也是真的（只有抬没有回 = 准星永久跑偏）
-##   视角分离    —— 第一人称看得见枪，第三人称看不见（否则镜头后面飘着一把枪）
+##   枪口即弹道  —— 子弹的起点是枪口，枪管指向这一发的实际落点，
+##                   而且真的画出了一条曳光（看不见的弹道等于没有）
+##   视图模型    —— 装上、三段动画都在、开火换弹会切片段
+##   视角分离    —— 第一人称有相机上的枪、没有世界里的枪；
+##                   第三人称反过来。两边都必须**看得见一把枪**
 ##
 ## 时序分帧：射线要等物理世界有位置，开火要等冷却，换弹要等时间。
 ## 但**不等真实时间** —— 这里直接拿 `tick(大 dt)` 快进，
@@ -34,6 +38,7 @@ var _hit_ok := false
 var _kill_ok := false
 var _ammo_ok := false
 var _recoil_ok := false
+var _muzzle_ok := false
 var _view_anim_ok := false
 var _view_ok := false
 
@@ -60,6 +65,8 @@ func _process(_delta: float) -> bool:
 		_check_kill()
 	if _f == 32:
 		_check_ammo()
+	if _f == 33:
+		_check_muzzle()
 	if _f == 34:
 		_check_recoil()
 	if _f == 35:
@@ -192,6 +199,41 @@ func _check_ammo() -> void:
 			"是" if refilled else "不是", _gun.ammo, _gun.mag_size])
 
 
+## 子弹真的从枪口出来，枪管真的指着弹着点。
+##
+## 这条守的是"看起来是一把枪"和"逻辑上是一把枪"之间的那道缝。
+## 最容易出的三种假绿：
+##   1) 从相机原点打射线 —— 打中、扣血、击杀全对，但曳光从脸前飞出去；
+##   2) 枪管永远朝着准心 —— 散布发生时"枪口没动、子弹歪了"；
+##   3) 根本没有曳光 —— 子弹瞬间移动，玩家只看见东西凭空掉血。
+## 所以这里比四件事：起点对枪口、枪管方向对实际弹道、曳光存在、射线飞出去了。
+func _check_muzzle() -> void:
+	if _gun == null or _gun._view == null:
+		return
+	var v = _gun._view
+	_gun.tick(1.0)
+	_gun.ammo = _gun.mag_size
+	# 开火前记枪口位置：后坐会让枪位移几厘米，拿开火后的位置比就永远差一点点。
+	var muzzle_before: Vector3 = v.muzzle_world()
+	_gun.trigger(true)
+	_gun.tick(0.001)
+	_gun.trigger(false)
+	var from: Vector3 = _gun.last_from
+	var to: Vector3 = _gun.last_to
+	var start_ok: bool = from.distance_to(muzzle_before) < 0.01
+	var dir := (to - from).normalized()
+	var barrel: Vector3 = v.barrel_world()
+	var aligned: bool = barrel.dot(dir) > 0.999
+	var traced: bool = _gun.tracer_count() > 0
+	var flew: bool = from.distance_to(to) > 0.5
+	_muzzle_ok = start_ok and aligned and traced and flew
+	print("GUN 枪口即弹道：起点在枪口 %s（偏 %.3f m）/ 枪管对弹道 %s（点积 %.4f）/ 曳光 %s / 飞出去 %s（%s）"
+		% ["是" if start_ok else "不是", from.distance_to(muzzle_before),
+			"是" if aligned else "不是", barrel.dot(dir),
+			"是" if traced else "不是", "是" if flew else "不是",
+			"是" if _muzzle_ok else "不是"])
+
+
 ## 后坐：抬起是真的，回来也是真的。
 ##
 ## 只验"抬起了"不够 —— 只抬不回的症状是"打一梭子之后准星永久偏高"，
@@ -251,18 +293,39 @@ func _check_view_anim() -> void:
 			"是" if _view_anim_ok else "不是"])
 
 
-## 枪只在该看见它的时候出现。
+## 两个视角里都得有枪，而且是**不同的两个实体**：
+## 第一人称用相机上的视图模型（跟着画面抖），第三人称用挂在手骨上的世界模型。
+##
+## 以前的断言是"第三人称看不见枪"—— 那守的是"镜头后面别飘枪"，
+## 症状却是"切到第三人称，人空着手"。现在守的是：两边各有一把，
+## 而且切开的时候互不串场。
 func _check_view() -> void:
-	if _gun == null or _gun._view == null:
+	if _gun == null or _gun._view == null or _gun._world_view == null:
 		return
+	var v := _gun._view as Node3D
+	var w := _gun._world_view as Node3D
+	var world_ok: bool = w.has_method("model_ok") and bool(w.call("model_ok"))
 	var fp: bool = _main._player.is_first_person()
-	var shown_fp: bool = (_gun._view as Node3D).visible
+	var fp_v: bool = v.visible
+	var fp_w: bool = w.visible
+	var fp_ok: bool = fp and fp_v and not fp_w
 	_main._player.toggle_view()
-	var shown_tp: bool = (_gun._view as Node3D).visible
+	# 第三人称：相机上的枪藏起来，世界里的枪必须真的被画出来
+	# （`is_visible_in_tree` 连同玩家外观一起查 —— 枪挂在手骨上，
+	#  外观被藏起来时枪也会跟着消失，只看 `visible` 会漏掉这种情况）。
+	var tp: bool = not _main._player.is_first_person()
+	var tp_v: bool = v.visible
+	var tp_w: bool = w.visible
+	var tp_tree: bool = w.is_visible_in_tree()
+	var tp_ok: bool = tp and not tp_v and tp_w and tp_tree and world_ok
 	_main._player.toggle_view()
-	_view_ok = fp and shown_fp and not shown_tp
-	print("GUN 视角分离：第一人称看得到 %s / 第三人称看得到 %s（%s）"
-		% ["是" if shown_fp else "不是", "是" if shown_tp else "不是",
+	_view_ok = fp_ok and tp_ok
+	print("GUN 两个视角都有枪：第一人称（相机上的枪 %s / 世界的枪 %s）%s / 第三人称（相机上的枪 %s / 世界的枪 %s，含外观 %s）%s（%s）"
+		% ["是" if fp_v else "不是", "是" if fp_w else "不是",
+			"是" if fp_ok else "不是",
+			"是" if tp_v else "不是", "是" if tp_w else "不是",
+			"是" if tp_tree else "不是",
+			"是" if tp_ok else "不是",
 			"是" if _view_ok else "不是"])
 
 
@@ -280,14 +343,15 @@ func _hp_of(rb: RigidBody3D, comps: Dictionary) -> int:
 
 func _report() -> bool:
 	var ok: bool = _content_ok and _hit_ok and _kill_ok and _ammo_ok \
-		and _recoil_ok and _view_anim_ok and _view_ok
-	print("GUN RESULT %s（数值来自内容 %s / 打中会疼 %s / 打死会记 %s / 会打空 %s / 后坐会回 %s / 视图动画 %s / 视角分离 %s）"
+		and _recoil_ok and _muzzle_ok and _view_anim_ok and _view_ok
+	print("GUN RESULT %s（数值来自内容 %s / 打中会疼 %s / 打死会记 %s / 会打空 %s / 后坐会回 %s / 枪口即弹道 %s / 视图动画 %s / 两个视角都有枪 %s）"
 		% ["OK" if ok else "FAIL",
 			"OK" if _content_ok else "FAIL",
 			"OK" if _hit_ok else "FAIL",
 			"OK" if _kill_ok else "FAIL",
 			"OK" if _ammo_ok else "FAIL",
 			"OK" if _recoil_ok else "FAIL",
+			"OK" if _muzzle_ok else "FAIL",
 			"OK" if _view_anim_ok else "FAIL",
 			"OK" if _view_ok else "FAIL"])
 	quit(0 if ok else 1)

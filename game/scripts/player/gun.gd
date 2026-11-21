@@ -15,7 +15,11 @@ extends RefCounted
 ## 把伤害也乘上后坐系数"——数值和表现的耦合就是这样长出来的。
 
 const GUN_VIEW = preload("res://scripts/player/gun_view.gd")
+const GUN_WORLD = preload("res://scripts/player/gun_world.gd")
 const SFX_SUBDIR := "assets/sfx"
+## 曳光存在多久。0.06 秒 = 三四帧 —— 够看见"从枪口出去"，
+## 又不会在墙上挂一条持久的激光线。
+const TRACER_TIME := 0.06
 
 ## 打中了"会疼的东西"时发一次。**这个信号只说"打中了"，不说打中的是谁。**
 ##
@@ -29,6 +33,18 @@ var _camera: Camera3D = null
 var _pack = null
 var _vitals = null
 var _view: Node3D = null
+## 第三人称的枪。挂在角色外观下，第一人称时跟着外观一起藏。
+var _world_view: Node3D = null
+## 当前这把枪可不可见（第一人称 true）。准心瞄点只在这个视角下更新。
+var _shown := true
+## 曳光弹节点与共享资源。开火是高频动作，每发 new 一个材质会把
+## "材质数不随物体增长"那条红线踩回去。
+var _tracers: Array = []
+var _tracer_mesh: BoxMesh = null
+var _tracer_mat: StandardMaterial3D = null
+## 探针用：最近一发从哪到哪。起点必须等于枪口。
+var last_from := Vector3.ZERO
+var last_to := Vector3.ZERO
 var _audio: AudioStreamPlayer = null
 var _rng := RandomNumberGenerator.new()
 
@@ -111,13 +127,30 @@ func setup_view(camera: Camera3D) -> void:
 	if _view.has_method("bind"):
 		_view.call("bind", _player)
 	camera.add_child(_view)
+	_setup_world_gun()
+
+
+## 第三人称看到的枪。挂在外观下面，具体挂哪根骨头由 `gun_world.gd` 决定。
+## 第一人称时外观整个隐藏，它自然也跟着不见（这里仍然显式开关一次，不靠巧合）。
+func _setup_world_gun() -> void:
+	if _player == null:
+		return
+	var host: Node3D = _player.get_node_or_null("visual")
+	if host == null:
+		host = _player
+	_world_view = GUN_WORLD.new()
+	_world_view.name = "gun_world"
+	host.add_child(_world_view)
 
 
 ## 第三人称下把枪藏起来：它挂在相机上，不藏的话画面右下角会飘着一把
 ## 没有人的枪，而且比玩家本人还显眼。
 func set_shown(shown: bool) -> void:
+	_shown = shown
 	if _view != null and _view.has_method("set_shown"):
 		_view.call("set_shown", shown)
+	if _world_view != null and _world_view.has_method("set_shown"):
+		_world_view.call("set_shown", not shown)
 
 
 ## 鼠标转身。枪的惯性甩动由视图模型自己算，这里只转一道手 ——
@@ -182,6 +215,12 @@ func reload() -> bool:
 func tick(delta: float) -> void:
 	if _cool > 0.0:
 		_cool -= delta
+	# 先摆枪口：这一帧还没开火时，枪管指向准心。开火时 `_fire()` 会用
+	# 这一发的**实际落点**覆盖它 —— 于是枪管和曳光永远指向同一个点。
+	# 顺序不能反：反了的话，"打偏一点"的那一枪，枪管仍然指着准心，
+	# 玩家看到的是"枪口没动，子弹歪了"，正是这次要修的那种分裂。
+	if _shown and _camera != null and _view != null and _view.has_method("aim_at_world"):
+		_view.call("aim_at_world", _aim_point())
 	if _reloading > 0.0:
 		_reloading -= delta
 		if _reloading <= 0.0:
@@ -195,10 +234,14 @@ func tick(delta: float) -> void:
 			_fire()
 	if _view != null and _view.has_method("tick"):
 		_view.call("tick", delta)
+	_tick_tracers(delta)
 
 
 ## 一发。顺序有意义：先扣弹、再打射线、最后才给反馈 ——
 ## 反过来（先播放枪声）会出现"没子弹也能响一声"的空枪幻听。
+##
+## **子弹从枪口出去，不是从眼睛出去。** 眼睛只回答"准心落在哪"；
+## 打中谁由枪口到那个点的那条线决定。玩家看到的曳光从枪口开始。
 func _fire() -> void:
 	if ammo <= 0 or _camera == null:
 		return
@@ -207,31 +250,40 @@ func _fire() -> void:
 	_cool = interval
 
 	var xf := _camera.global_transform
-	var dir := -xf.basis.z
+	var forward := -xf.basis.z
+	# 1) 准心落在哪：屏幕中心那条线，不带散布。
+	var aim := _aim_point()
+	# 2) 枪口在哪。第一人称用视图模型上量出来的那个点；没有视图时退回相机。
+	var from := xf.origin
+	if _shown and _view != null and _view.has_method("muzzle_world"):
+		from = _view.call("muzzle_world")
+	var dir := aim - from
+	if dir.length() < 0.25:
+		dir = forward
+	dir = dir.normalized()
+	# 3) 散布：绕相机轴抖 —— 抖的是"瞄偏了多少"，不是枪口的位置。
 	var rad := deg_to_rad(spread)
 	if rad > 0.0:
-		# 两维抖动近似一个锥。够用，而且比构造正交基便宜——
-		# 每一发都要做的事，不值得为"完美的圆形分布"多算 20 行。
 		dir = dir.rotated(xf.basis.x, _rng.randf_range(-rad, rad))
 		dir = dir.rotated(xf.basis.y, _rng.randf_range(-rad, rad))
 
-	var from := xf.origin
-	_ray.from = from
-	_ray.to = from + dir * reach
-	_ray.collide_with_bodies = true
-	_exclude.clear()
-	if _player != null:
-		_exclude.append(_player.get_rid())
-	_ray.exclude = _exclude
-	var hit: Dictionary = _camera.get_world_3d().direct_space_state.intersect_ray(_ray)
+	# 4) 从枪口打出去。命中、曳光终点、伤害方向都以这一条为准。
+	var hit := _cast(from, from + dir * reach)
+	var end := from + dir * reach
+	if not hit.is_empty():
+		end = hit["position"]
+	last_from = from
+	last_to = end
+	if _shown and _view != null and _view.has_method("aim_at_world"):
+		# 让枪管对准这一发的实际落点（散布之后的那个点）。
+		_view.call("aim_at_world", end)
+	_spawn_tracer(from, end)
+	if _world_view != null and _world_view.has_method("pulse"):
+		_world_view.call("pulse")
 
 	if not hit.is_empty() and _vitals != null:
 		# 引擎不判断"打中的是不是怪"——它只问血量系统"这个东西会不会疼"。
-		# 打中墙、打中地板、打中没血量的箱子，返回的都是 ok=false。
-		#
-		# **方向一起传过去**：只有开枪的人知道子弹往哪飞，
-		# 而"往哪退"这个反馈要从那个方向反推。少传一样，被打的东西就只会掉血，
-		# 不会被打退 —— 那一枪看起来就"没打中"。
+		# **方向一起传过去**：枪口到落点的方向，就是击退的方向。
 		var r: Dictionary = _vitals.damage(hit.get("collider"), damage, dir)
 		if bool(r.get("ok", false)):
 			hits += 1
@@ -247,6 +299,92 @@ func _fire() -> void:
 		_audio.play()
 	if _view != null and _view.has_method("kick"):
 		_view.call("kick")
+
+
+## 屏幕中心那条线打到哪。没有命中就打满射程 —— 枪口仍然要有个方向。
+func _aim_point() -> Vector3:
+	var xf := _camera.global_transform
+	var far := xf.origin - xf.basis.z * reach
+	var hit := _cast(xf.origin, far)
+	return far if hit.is_empty() else (hit["position"] as Vector3)
+
+
+## 一条射线。排除玩家自己 —— 枪口就在玩家身前，不排除会先打中自己。
+func _cast(from: Vector3, to: Vector3) -> Dictionary:
+	_ray.from = from
+	_ray.to = to
+	_ray.collide_with_bodies = true
+	_exclude.clear()
+	if _player != null:
+		_exclude.append(_player.get_rid())
+	_ray.exclude = _exclude
+	return _camera.get_world_3d().direct_space_state.intersect_ray(_ray)
+
+
+## 一条从枪口到落点的曳光。不是"子弹模型"——是一道 0.06 秒的亮线，
+## 让玩家看见"这一发真的从枪口出去了、打到了那里"。
+##
+## 挂在玩家的父节点上并 `top_level`：曳光是世界里的东西，
+## 不该跟着角色转身/缩放，也不该被手里的枪带着走。
+func _spawn_tracer(a: Vector3, b: Vector3) -> void:
+	var length := a.distance_to(b)
+	if length < 0.08 or _player == null:
+		return
+	var host: Node = _player.get_parent()
+	if host == null:
+		return
+	var dir := (b - a) / length
+	var up := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.98 else Vector3.RIGHT
+	var t := Node3D.new()
+	t.top_level = true
+	host.add_child(t)
+	t.global_transform = Transform3D(Basis.looking_at(dir, up), (a + b) * 0.5)
+	var mi := MeshInstance3D.new()
+	mi.mesh = _tracer_box()
+	mi.material_override = _tracer_material()
+	mi.scale = Vector3(1.0, 1.0, length)
+	t.add_child(mi)
+	_tracers.append({"node": t, "life": TRACER_TIME})
+
+
+func _tracer_box() -> BoxMesh:
+	if _tracer_mesh == null:
+		_tracer_mesh = BoxMesh.new()
+		_tracer_mesh.size = Vector3(0.012, 0.012, 1.0)
+	return _tracer_mesh
+
+
+func _tracer_material() -> StandardMaterial3D:
+	if _tracer_mat != null:
+		return _tracer_mat
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(1.0, 0.88, 0.52, 1.0)
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.8, 0.4)
+	m.emission_energy_multiplier = 2.0
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	# 不测深度：枪口就在画面右侧的枪身上，测深度会被自己的枪挡住。
+	m.no_depth_test = true
+	_tracer_mat = m
+	return m
+
+
+func _tick_tracers(delta: float) -> void:
+	for i in range(_tracers.size() - 1, -1, -1):
+		_tracers[i]["life"] = float(_tracers[i]["life"]) - delta
+		if float(_tracers[i]["life"]) > 0.0:
+			continue
+		var n = _tracers[i]["node"]
+		if is_instance_valid(n):
+			n.queue_free()
+		_tracers.remove_at(i)
+
+
+## 探针用：当前还活着的曳光数量。
+func tracer_count() -> int:
+	return _tracers.size()
 
 
 ## HUD 与探针共用的一份快照。命中率在这里算，而不是各算各的。
