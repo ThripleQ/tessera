@@ -34,6 +34,7 @@ var _hit_ok := false
 var _kill_ok := false
 var _ammo_ok := false
 var _recoil_ok := false
+var _view_anim_ok := false
 var _view_ok := false
 
 
@@ -61,6 +62,8 @@ func _process(_delta: float) -> bool:
 		_check_ammo()
 	if _f == 34:
 		_check_recoil()
+	if _f == 35:
+		_check_view_anim()
 	if _f == 36:
 		_check_view()
 		return _report()
@@ -213,6 +216,41 @@ func _check_recoil() -> void:
 		% [before, up, back, "是" if _recoil_ok else "不是"])
 
 
+## 视图模型真的装上了吗 —— 而且三段动画都在。
+##
+## 这条守的不是"模型好看"，是"美术换了文件之后，代码还认得它"。
+## 之前的枪是一根没有动画的网格；现在换成了带骨骼的 AKM，
+## 如果动画名改了、骨架没了、或者模型悄悄加载失败，枪会变成
+## 一把静止的模型（甚至隐形），而"开火/换弹全绿"的旧断言一个都不会红。
+func _check_view_anim() -> void:
+	if _gun == null or _gun._view == null:
+		return
+	var v = _gun._view
+	var loaded: bool = v.model_ok() and v.has_clip("idle") \
+		and v.has_clip("shoot") and v.has_clip("reload")
+	var shoot := false
+	var reload := false
+	if loaded:
+		# 先清冷却，再走真实扳机路径打一发。
+		_gun.tick(1.0)
+		_gun.ammo = _gun.mag_size
+		_gun.trigger(true)
+		_gun.tick(0.001)
+		_gun.trigger(false)
+		shoot = v.current_clip().to_lower().ends_with("shoot")
+		# 再把弹匣留一发，触发换弹。
+		_gun.ammo = 1
+		_gun.tick(1.0)
+		_gun.reload()
+		reload = v.current_clip().to_lower().ends_with("reload")
+	_view_anim_ok = loaded and shoot and reload
+	print("GUN 视图模型：装上 %s / 三段动画 %s / 开火播 Shoot %s / 换弹播 Reload %s（%s）"
+		% ["是" if v.model_ok() else "不是",
+			"是" if v.has_clip("idle") and v.has_clip("shoot") and v.has_clip("reload") else "不是",
+			"是" if shoot else "不是", "是" if reload else "不是",
+			"是" if _view_anim_ok else "不是"])
+
+
 ## 枪只在该看见它的时候出现。
 func _check_view() -> void:
 	if _gun == null or _gun._view == null:
@@ -242,14 +280,15 @@ func _hp_of(rb: RigidBody3D, comps: Dictionary) -> int:
 
 func _report() -> bool:
 	var ok: bool = _content_ok and _hit_ok and _kill_ok and _ammo_ok \
-		and _recoil_ok and _view_ok
-	print("GUN RESULT %s（数值来自内容 %s / 打中会疼 %s / 打死会记 %s / 会打空 %s / 后坐会回 %s / 视角分离 %s）"
+		and _recoil_ok and _view_anim_ok and _view_ok
+	print("GUN RESULT %s（数值来自内容 %s / 打中会疼 %s / 打死会记 %s / 会打空 %s / 后坐会回 %s / 视图动画 %s / 视角分离 %s）"
 		% ["OK" if ok else "FAIL",
 			"OK" if _content_ok else "FAIL",
 			"OK" if _hit_ok else "FAIL",
 			"OK" if _kill_ok else "FAIL",
 			"OK" if _ammo_ok else "FAIL",
 			"OK" if _recoil_ok else "FAIL",
+			"OK" if _view_anim_ok else "FAIL",
 			"OK" if _view_ok else "FAIL"])
 	quit(0 if ok else 1)
 	return ok

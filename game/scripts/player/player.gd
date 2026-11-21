@@ -241,6 +241,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_captured = false
 	elif event is InputEventMouseMotion and _captured:
 		_view.look(event.relative)
+		# 手里的枪跟着"甩"一下。只在第一人称下通知 —— 第三人称下枪是藏着的，
+		# 让它跟着积累惯性没有意义，切回来还会先抖一下。
+		if _gun != null and _view.first_person:
+			_gun.look(event.relative)
 	elif event is InputEventKey and event.physical_keycode == KEY_SPACE and event.pressed:
 		# 不直接起跳，只记一次"意图"。由物理帧判断当时到底能不能跳。
 		_buffer = JUMP_BUFFER

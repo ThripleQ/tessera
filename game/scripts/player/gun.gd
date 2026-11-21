@@ -105,6 +105,11 @@ func setup_view(camera: Camera3D) -> void:
 		return
 	_view = GUN_VIEW.new()
 	_view.name = "gun_view"
+	# 入树之前把玩家交给视图模型：它要读速度和落地状态做晃动。
+	# 入树之后再给也行，但第一帧的 `_ready` 已经在跑了 ——
+	# 那会让枪在头一帧里没有晃动基准，看起来像"落地瞬间卡了一下"。
+	if _view.has_method("bind"):
+		_view.call("bind", _player)
 	camera.add_child(_view)
 
 
@@ -113,6 +118,13 @@ func setup_view(camera: Camera3D) -> void:
 func set_shown(shown: bool) -> void:
 	if _view != null and _view.has_method("set_shown"):
 		_view.call("set_shown", shown)
+
+
+## 鼠标转身。枪的惯性甩动由视图模型自己算，这里只转一道手 ——
+## 玩家不该知道"枪的视图"长什么样，它只知道自己转过视角。
+func look(relative: Vector2) -> void:
+	if _view != null and _view.has_method("look"):
+		_view.call("look", relative)
 
 
 func _make_audio(sound_id: String) -> void:
@@ -159,6 +171,11 @@ func reload() -> bool:
 		ammo = mag_size
 		return true
 	_reloading = reload_time
+	# 换弹的"进度"住在这里，动画住在视图模型里。把总时长传过去，
+	# 动画自己按它变速 —— 否则内容里把 reload 从 1.7 改成 1.0 那天，
+	# 弹匣已经满了，手还在慢悠悠地拉枪栓。
+	if _view != null and _view.has_method("reload_started"):
+		_view.call("reload_started", reload_time)
 	return true
 
 
@@ -169,6 +186,8 @@ func tick(delta: float) -> void:
 		_reloading -= delta
 		if _reloading <= 0.0:
 			ammo = mag_size
+			if _view != null and _view.has_method("reload_finished"):
+				_view.call("reload_finished")
 	elif _trigger and auto and _cool <= 0.0:
 		if ammo <= 0:
 			reload()
